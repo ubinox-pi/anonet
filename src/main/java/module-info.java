@@ -12,6 +12,8 @@ module com.anonet.anonetclient {
     exports com.anonet.anonetclient.transfer;
     exports com.anonet.anonetclient.discovery;
     exports com.anonet.anonetclient.publicnet;
+    exports com.anonet.anonetclient.dht;
+    exports com.anonet.anonetclient.relay;
     exports com.anonet.anonetclient.ui;
 
     opens com.anonet.anonetclient.ui to javafx.graphics;

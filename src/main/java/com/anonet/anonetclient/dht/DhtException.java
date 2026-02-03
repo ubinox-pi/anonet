@@ -4,9 +4,9 @@
  * See the LICENSE file in the project root for full license information.
  *
  * Project: anonet-client
- * Package: com.anonet.anonetclient.crypto.session
- * Created by: Ashish Kushwaha on 19-01-2026 22:10
- * File: SessionCryptoException.java
+ * Package: com.anonet.anonetclient.dht
+ * Created by: Ashish Kushwaha on 02-02-2026 18:35
+ * File: DhtException.java
  *
  * This source code is intended for educational and non-commercial purposes only.
  * Redistribution and use in source and binary forms, with or without modification,
@@ -17,15 +17,16 @@
  *
  */
 
-package com.anonet.anonetclient.crypto.session;
+package com.anonet.anonetclient.dht;
 
-public class SessionCryptoException extends RuntimeException {
 
-    public SessionCryptoException(String message) {
+public class DhtException extends RuntimeException {
+
+    public DhtException(String message) {
         super(message);
     }
 
-    public SessionCryptoException(String message, Throwable cause) {
+    public DhtException(String message, Throwable cause) {
         super(message, cause);
     }
 }

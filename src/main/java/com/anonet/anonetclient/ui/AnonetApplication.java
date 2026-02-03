@@ -23,8 +23,13 @@ import com.anonet.anonetclient.crypto.session.SessionCryptoVerification;
 import com.anonet.anonetclient.discovery.DiscoveryClient;
 import com.anonet.anonetclient.discovery.DiscoveryException;
 import com.anonet.anonetclient.discovery.PeerInfo;
+import com.anonet.anonetclient.identity.AnonetId;
+import com.anonet.anonetclient.identity.DeterministicIdentity;
+import com.anonet.anonetclient.identity.IdentityBackup;
 import com.anonet.anonetclient.identity.IdentityManager;
 import com.anonet.anonetclient.identity.LocalIdentity;
+import com.anonet.anonetclient.identity.SeedPhrase;
+import com.anonet.anonetclient.identity.Username;
 import com.anonet.anonetclient.lan.LanDiscoveryService;
 import com.anonet.anonetclient.lan.LanPeer;
 import com.anonet.anonetclient.publicnet.ConnectionState;
@@ -313,7 +318,20 @@ public class AnonetApplication extends Application {
         cryptoStatusLabel.setFont(Font.font("System", FontWeight.NORMAL, 10));
         cryptoStatusLabel.setStyle("-fx-text-fill: #a0a0a0;");
 
-        section.getChildren().addAll(fingerprintTitleLabel, fingerprintValueLabel, cryptoStatusLabel);
+        HBox backupButtons = new HBox(10);
+        backupButtons.setAlignment(Pos.CENTER);
+
+        Button backupButton = new Button("💾 Backup Identity");
+        backupButton.setStyle("-fx-background-color: #16c79a; -fx-text-fill: #ffffff; -fx-font-size: 10; -fx-cursor: hand;");
+        backupButton.setOnAction(e -> onBackupIdentity());
+
+        Button restoreButton = new Button("📥 Restore Identity");
+        restoreButton.setStyle("-fx-background-color: #0f3460; -fx-text-fill: #ffffff; -fx-font-size: 10; -fx-cursor: hand;");
+        restoreButton.setOnAction(e -> onRestoreIdentity());
+
+        backupButtons.getChildren().addAll(backupButton, restoreButton);
+
+        section.getChildren().addAll(fingerprintTitleLabel, fingerprintValueLabel, cryptoStatusLabel, backupButtons);
         return section;
     }
 
@@ -756,5 +774,87 @@ public class AnonetApplication extends Application {
                 case DISCONNECTED -> "○";
             };
         }
+    }
+
+    private void onBackupIdentity() {
+        showInfoDialog("Backup Identity",
+            "Backup functionality is under development.\n\n" +
+            "Your identity fingerprint:\n" + localIdentity.getFormattedFingerprint() + "\n\n" +
+            "Please write down this fingerprint for now.");
+    }
+
+    private void onRestoreIdentity() {
+        showInfoDialog("Restore Identity",
+            "Restore functionality is under development.\n\n" +
+            "Current identity cannot be restored yet.");
+    }
+
+    private void showRestoreDialog() {
+    }
+
+    private void restoreFromBackupFile() {
+    }
+
+    private void restoreFromSeedPhrase() {
+        javafx.scene.control.TextInputDialog dialog = new javafx.scene.control.TextInputDialog();
+        dialog.setTitle("Restore from Seed Phrase");
+        dialog.setHeaderText("Enter your 12-word seed phrase:");
+        dialog.setContentText("Seed phrase:");
+        dialog.getEditor().setPrefColumnCount(50);
+        dialog.getDialogPane().getStylesheets().add("data:text/css," +
+            ".dialog-pane { -fx-background-color: #16213e; } " +
+            ".dialog-pane .content { -fx-background-color: #16213e; } " +
+            ".dialog-pane .label { -fx-text-fill: #ffffff; } " +
+            ".dialog-pane .text-field { -fx-background-color: #0f3460; -fx-text-fill: #ffffff; }");
+
+        dialog.showAndWait().ifPresent(mnemonicText -> {
+            try {
+                SeedPhrase seedPhrase = SeedPhrase.fromWords(mnemonicText);
+
+                identityManager.deleteIdentity();
+                LocalIdentity newIdentity = identityManager.restoreFromSeedPhrase(seedPhrase);
+                localIdentity = newIdentity;
+
+                primaryStage.close();
+                Platform.runLater(() -> {
+                    try {
+                        start(new Stage());
+                        showInfoDialog("Restore Complete",
+                            "Identity restored successfully!\n\n" +
+                            "Fingerprint: " + newIdentity.getFormattedFingerprint());
+                    } catch (Exception e) {
+                        showErrorDialog("Restart Failed", "Please restart the application manually.");
+                    }
+                });
+
+            } catch (Exception e) {
+                showErrorDialog("Restore Failed", "Invalid seed phrase: " + e.getMessage());
+            }
+        });
+    }
+
+
+    private void showInfoDialog(String title, String message) {
+        javafx.scene.control.Alert alert = new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.INFORMATION);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        alert.setContentText(message);
+        alert.getDialogPane().getStylesheets().add("data:text/css," +
+            ".dialog-pane { -fx-background-color: #16213e; } " +
+            ".dialog-pane .content { -fx-background-color: #16213e; } " +
+            ".dialog-pane .label { -fx-text-fill: #ffffff; }");
+        alert.showAndWait();
+    }
+
+    private void showErrorDialog(String title, String message) {
+        javafx.scene.control.Alert alert = new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.ERROR);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        alert.setContentText(message);
+        alert.getDialogPane().getStylesheets().add("data:text/css," +
+            ".dialog-pane { -fx-background-color: #16213e; } " +
+            ".dialog-pane .content { -fx-background-color: #16213e; } " +
+            ".dialog-pane .label { -fx-text-fill: #ffffff; }");
+        alert.showAndWait();
     }
 }
