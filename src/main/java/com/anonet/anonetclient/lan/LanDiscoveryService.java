@@ -20,6 +20,7 @@
 package com.anonet.anonetclient.lan;
 
 import com.anonet.anonetclient.identity.LocalIdentity;
+import com.anonet.anonetclient.logging.AnonetLogger;
 
 import java.net.InetAddress;
 import java.time.Instant;
@@ -34,6 +35,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class LanDiscoveryService {
 
+    private static final AnonetLogger LOG = AnonetLogger.get(LanDiscoveryService.class);
     private static final int CLEANUP_INTERVAL_MS = 5000;
 
     private final LocalIdentity localIdentity;
@@ -72,6 +74,7 @@ public final class LanDiscoveryService {
                     CLEANUP_INTERVAL_MS,
                     TimeUnit.MILLISECONDS
             );
+            LOG.info("LAN discovery started, broadcasting on port %d", LanDiscoveryProtocol.DISCOVERY_PORT);
         }
     }
 

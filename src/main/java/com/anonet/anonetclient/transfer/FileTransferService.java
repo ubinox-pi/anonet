@@ -21,6 +21,7 @@ package com.anonet.anonetclient.transfer;
 
 import com.anonet.anonetclient.identity.LocalIdentity;
 import com.anonet.anonetclient.lan.LanPeer;
+import com.anonet.anonetclient.logging.AnonetLogger;
 
 import java.io.File;
 import java.io.IOException;
@@ -31,6 +32,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 public final class FileTransferService {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(FileTransferService.class);
 
     private final LocalIdentity localIdentity;
     private final Path downloadDirectory;
@@ -62,17 +65,18 @@ public final class FileTransferService {
             try {
                 receiver.startListening();
                 receiverRunning = true;
+                LOG.info("File receiver started on port %d", TransferProtocol.TRANSFER_PORT);
                 while (receiverRunning && receiver.isRunning()) {
                     try {
                         receiver.acceptAndReceive();
                     } catch (FileTransferException e) {
                         if (receiverRunning) {
-                            System.err.println("Transfer error: " + e.getMessage());
+                            LOG.error("Transfer error: %s", e.getMessage());
                         }
                     }
                 }
             } catch (IOException e) {
-                System.err.println("Failed to start receiver: " + e.getMessage());
+                LOG.error("Failed to start receiver", e);
             }
         });
     }

@@ -19,6 +19,7 @@
 
 package com.anonet.anonetclient.onion;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
 import com.anonet.anonetclient.onion.OnionProtocol.OnionCell;
 import com.anonet.anonetclient.onion.OnionProtocol.RelayCell;
 import com.anonet.anonetclient.onion.OnionProtocol.Command;

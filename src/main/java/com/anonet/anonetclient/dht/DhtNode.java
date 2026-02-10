@@ -19,6 +19,8 @@
 
 package com.anonet.anonetclient.dht;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -37,6 +39,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 public final class DhtNode {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(DhtNode.class);
 
     public static final int DEFAULT_PORT = 51820;
     public static final int MAX_PACKET_SIZE = 1400;
@@ -93,6 +97,7 @@ public final class DhtNode {
         listenerExecutor.submit(this::listenLoop);
         maintenanceExecutor.scheduleAtFixedRate(this::maintenance, 60, 60, TimeUnit.SECONDS);
 
+        LOG.info("DHT node started on port %d with nodeId %s", port, nodeId.toHex().substring(0, 16));
         notifyStatus("DHT node started on port " + port);
     }
 
@@ -113,6 +118,7 @@ public final class DhtNode {
             maintenanceExecutor.shutdownNow();
         }
 
+        LOG.info("DHT node stopped");
         notifyStatus("DHT node stopped");
     }
 
