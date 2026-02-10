@@ -21,15 +21,10 @@ package com.anonet.anonetclient.ui;
 
 import com.anonet.anonetclient.crypto.session.SessionCryptoVerification;
 import com.anonet.anonetclient.discovery.DiscoveryClient;
-import com.anonet.anonetclient.discovery.DiscoveryException;
 import com.anonet.anonetclient.discovery.PeerInfo;
-import com.anonet.anonetclient.identity.AnonetId;
-import com.anonet.anonetclient.identity.DeterministicIdentity;
-import com.anonet.anonetclient.identity.IdentityBackup;
 import com.anonet.anonetclient.identity.IdentityManager;
 import com.anonet.anonetclient.identity.LocalIdentity;
 import com.anonet.anonetclient.identity.SeedPhrase;
-import com.anonet.anonetclient.identity.Username;
 import com.anonet.anonetclient.lan.LanDiscoveryService;
 import com.anonet.anonetclient.lan.LanPeer;
 import com.anonet.anonetclient.publicnet.ConnectionState;
