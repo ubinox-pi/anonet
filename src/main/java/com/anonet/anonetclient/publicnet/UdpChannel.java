@@ -20,6 +20,7 @@
 package com.anonet.anonetclient.publicnet;
 
 import com.anonet.anonetclient.crypto.session.SecureChannel;
+import com.anonet.anonetclient.logging.AnonetLogger;
 
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
@@ -34,6 +35,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 public final class UdpChannel implements Closeable {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(UdpChannel.class);
 
     private final DatagramSocket socket;
     private final InetSocketAddress remoteAddress;
@@ -76,6 +79,7 @@ public final class UdpChannel implements Closeable {
     public boolean connect() throws IOException {
         boolean connected = reliableUdp.connect();
         if (connected) {
+            LOG.info("UDP channel connected to %s", remoteAddress);
             startReceiveThread();
         }
         return connected;
@@ -178,6 +182,7 @@ public final class UdpChannel implements Closeable {
         }
 
         notifyStatus("UDP channel closed");
+        LOG.info("UDP channel closed");
     }
 
     private void startReceiveThread() {

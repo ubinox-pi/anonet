@@ -19,6 +19,8 @@
 
 package com.anonet.anonetclient.lan;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -36,14 +38,18 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class LanBroadcaster {
 
+    private static final AnonetLogger LOG = AnonetLogger.get(LanBroadcaster.class);
+
     private final String fingerprint;
     private final AtomicBoolean running;
     private final ScheduledExecutorService scheduler;
     private DatagramSocket socket;
+    private volatile int dhtPort;
 
     public LanBroadcaster(String fingerprint) {
         this.fingerprint = fingerprint;
         this.running = new AtomicBoolean(false);
+        this.dhtPort = 0;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "LanBroadcaster");
             thread.setDaemon(true);
@@ -51,11 +57,16 @@ public final class LanBroadcaster {
         });
     }
 
+    public void setDhtPort(int port) {
+        this.dhtPort = port;
+    }
+
     public void start() {
         if (running.compareAndSet(false, true)) {
             try {
                 socket = new DatagramSocket();
                 socket.setBroadcast(true);
+                LOG.info("LAN broadcaster started");
                 scheduler.scheduleAtFixedRate(
                         this::broadcast,
                         0,
@@ -64,6 +75,7 @@ public final class LanBroadcaster {
                 );
             } catch (SocketException e) {
                 running.set(false);
+                LOG.error("Failed to start broadcaster", e);
                 throw new LanDiscoveryException("Failed to start broadcaster", e);
             }
         }
@@ -71,6 +83,7 @@ public final class LanBroadcaster {
 
     public void stop() {
         if (running.compareAndSet(true, false)) {
+            LOG.info("LAN broadcaster stopped");
             scheduler.shutdown();
             try {
                 scheduler.awaitTermination(1, TimeUnit.SECONDS);
@@ -88,7 +101,7 @@ public final class LanBroadcaster {
             return;
         }
 
-        byte[] messageData = LanDiscoveryProtocol.createDiscoveryMessage(fingerprint);
+        byte[] messageData = LanDiscoveryProtocol.createDiscoveryMessage(fingerprint, dhtPort);
         List<InetAddress> broadcastAddresses = getBroadcastAddresses();
 
         for (InetAddress broadcastAddress : broadcastAddresses) {

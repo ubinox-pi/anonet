@@ -19,6 +19,8 @@
 
 package com.anonet.anonetclient.publicnet;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -31,6 +33,8 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class UdpHolePuncher {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(UdpHolePuncher.class);
 
     private static final int PUNCH_TIMEOUT_MS = 100;
     private static final int PUNCH_ATTEMPTS = 50;
@@ -66,6 +70,7 @@ public final class UdpHolePuncher {
         byte[] punchPacket = createPunchPacket(nonce);
 
         stateCallback.onStateChanged(ConnectionState.HOLE_PUNCHING);
+        LOG.info("Starting hole punch to %d target addresses", targetAddresses.size());
 
         try {
             socket.setSoTimeout(PUNCH_TIMEOUT_MS);
@@ -77,6 +82,7 @@ public final class UdpHolePuncher {
 
                 HolePunchResult result = tryReceivePunchResponse(expectedFingerprint);
                 if (result != null && result.success()) {
+                    LOG.info("Hole punch successful to %s:%d", result.remoteAddress().getAddress().getHostAddress(), result.remoteAddress().getPort());
                     sendPunchAck(result.remoteAddress(), nonce);
                     return result;
                 }

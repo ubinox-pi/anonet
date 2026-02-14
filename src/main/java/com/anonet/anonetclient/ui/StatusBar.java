@@ -31,6 +31,8 @@ public final class StatusBar extends HBox {
 
     private final Label dhtStatusLabel;
     private final Label lanStatusLabel;
+    private final Label relayStatusLabel;
+    private final Label onionStatusLabel;
     private final Label connectionStatusLabel;
     private final Label versionLabel;
 
@@ -42,6 +44,8 @@ public final class StatusBar extends HBox {
 
         dhtStatusLabel = createStatusLabel("DHT: Offline");
         lanStatusLabel = createStatusLabel("LAN: Scanning...");
+        relayStatusLabel = createStatusLabel("Relay: Off");
+        onionStatusLabel = createStatusLabel("Onion: Off");
         connectionStatusLabel = createStatusLabel("Connections: 0");
 
         Region spacer = new Region();
@@ -50,7 +54,7 @@ public final class StatusBar extends HBox {
         versionLabel = createStatusLabel("ANONET v1.0.0");
         versionLabel.setStyle("-fx-text-fill: #666666; -fx-font-size: 10;");
 
-        getChildren().addAll(dhtStatusLabel, lanStatusLabel, connectionStatusLabel, spacer, versionLabel);
+        getChildren().addAll(dhtStatusLabel, lanStatusLabel, relayStatusLabel, onionStatusLabel, connectionStatusLabel, spacer, versionLabel);
     }
 
     private Label createStatusLabel(String text) {
@@ -97,5 +101,29 @@ public final class StatusBar extends HBox {
 
     public void setVersion(String version) {
         Platform.runLater(() -> versionLabel.setText("ANONET " + version));
+    }
+
+    public void setRelayStatus(boolean running, int connectedClients) {
+        Platform.runLater(() -> {
+            if (running) {
+                relayStatusLabel.setText("Relay: Active (" + connectedClients + " clients)");
+                relayStatusLabel.setStyle("-fx-text-fill: #16c79a; -fx-font-size: 10;");
+            } else {
+                relayStatusLabel.setText("Relay: Off");
+                relayStatusLabel.setStyle("-fx-text-fill: #a0a0a0; -fx-font-size: 10;");
+            }
+        });
+    }
+
+    public void setOnionStatus(boolean running, int activeCircuits) {
+        Platform.runLater(() -> {
+            if (running) {
+                onionStatusLabel.setText("Onion: Active (" + activeCircuits + " circuits)");
+                onionStatusLabel.setStyle("-fx-text-fill: #16c79a; -fx-font-size: 10;");
+            } else {
+                onionStatusLabel.setText("Onion: Off");
+                onionStatusLabel.setStyle("-fx-text-fill: #a0a0a0; -fx-font-size: 10;");
+            }
+        });
     }
 }

@@ -20,8 +20,11 @@
 package com.anonet.anonetclient.onion;
 
 import com.anonet.anonetclient.dht.DhtClient;
+import com.anonet.anonetclient.dht.DhtContact;
 import com.anonet.anonetclient.dht.NodeId;
 import com.anonet.anonetclient.dht.PeerAnnouncement;
+import com.anonet.anonetclient.identity.LocalIdentity;
+import com.anonet.anonetclient.logging.AnonetLogger;
 import com.anonet.anonetclient.onion.OnionCircuit.CircuitHop;
 import com.anonet.anonetclient.onion.OnionProtocol.OnionCell;
 import com.anonet.anonetclient.onion.OnionProtocol.Command;
@@ -32,27 +35,43 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.security.KeyPair;
+import java.security.Signature;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 public final class CircuitBuilder {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(CircuitBuilder.class);
 
     public static final int DEFAULT_HOP_COUNT = 3;
     public static final int CONNECT_TIMEOUT_MS = 10000;
     public static final int READ_TIMEOUT_MS = 30000;
     public static final String RELAY_DHT_KEY = "anonet-onion-relays";
+    private static final String SIGNATURE_ALGORITHM = "SHA256withECDSA";
+
+    private static final int MAX_RELAY_FAILURES = 3;
 
     private final DhtClient dhtClient;
+    private final LocalIdentity localIdentity;
     private final List<RelayInfo> knownRelays;
+    private final Map<String, Integer> failCounts;
     private Consumer<String> statusCallback;
 
-    public CircuitBuilder(DhtClient dhtClient) {
+    public CircuitBuilder(DhtClient dhtClient, LocalIdentity localIdentity) {
         this.dhtClient = dhtClient;
+        this.localIdentity = localIdentity;
         this.knownRelays = new ArrayList<>();
+        this.failCounts = new ConcurrentHashMap<>();
+    }
+
+    public CircuitBuilder(DhtClient dhtClient) {
+        this(dhtClient, null);
     }
 
     public void setStatusCallback(Consumer<String> callback) {
@@ -69,6 +88,7 @@ public final class CircuitBuilder {
                 refreshRelayList();
 
                 if (knownRelays.size() < hopCount) {
+                    LOG.warn("Not enough relays: %d available, %d needed", knownRelays.size(), hopCount);
                     throw new OnionException("Not enough relays available: " + knownRelays.size() + " < " + hopCount);
                 }
 
@@ -90,11 +110,13 @@ public final class CircuitBuilder {
                 }
 
                 circuit.setState(OnionCircuit.State.READY);
+                LOG.info("Circuit ready with %d hops, circuitId=%d", circuit.getHopCount(), circuit.getCircuitId());
                 notifyStatus("Circuit ready with " + circuit.getHopCount() + " hops");
 
                 return circuit;
 
             } catch (Exception e) {
+                LOG.error("Failed to build circuit", e);
                 throw new OnionException("Failed to build circuit", e);
             }
         });
@@ -102,13 +124,23 @@ public final class CircuitBuilder {
 
     public void refreshRelayList() {
         try {
-            NodeId relayKey = NodeId.fromString(RELAY_DHT_KEY);
-            Optional<PeerAnnouncement> result = dhtClient.lookupByFingerprint(RELAY_DHT_KEY).get();
-
-            if (result.isPresent()) {
-                notifyStatus("Found relay list in DHT");
+            List<DhtContact> dhtPeers = dhtClient.getKnownPeers();
+            int added = 0;
+            for (DhtContact peer : dhtPeers) {
+                InetSocketAddress relayAddr = new InetSocketAddress(peer.getIp(), OnionRelay.DEFAULT_PORT);
+                String fingerprint = peer.getNodeId().toHex();
+                RelayInfo relay = new RelayInfo(fingerprint, relayAddr, new byte[0], 0, false);
+                if (!knownRelays.contains(relay)) {
+                    knownRelays.add(relay);
+                    added++;
+                }
+            }
+            if (added > 0) {
+                notifyStatus("Discovered " + added + " potential onion relays from DHT (" + knownRelays.size() + " total)");
+                LOG.info("Refreshed relay list: %d new, %d total", added, knownRelays.size());
             }
         } catch (Exception e) {
+            LOG.warn("Failed to refresh relay list: %s", e.getMessage());
             notifyStatus("Failed to refresh relay list: " + e.getMessage());
         }
     }
@@ -130,10 +162,55 @@ public final class CircuitBuilder {
     }
 
     private Socket connectToRelay(RelayInfo relay) throws IOException {
-        Socket socket = new Socket();
-        socket.connect(relay.getAddress(), CONNECT_TIMEOUT_MS);
-        socket.setSoTimeout(READ_TIMEOUT_MS);
-        return socket;
+        try {
+            Socket socket = new Socket();
+            socket.connect(relay.getAddress(), CONNECT_TIMEOUT_MS);
+            socket.setSoTimeout(READ_TIMEOUT_MS);
+
+            if (localIdentity != null) {
+                authenticateWithRelay(socket);
+            }
+
+            failCounts.remove(relay.getFingerprint());
+            return socket;
+        } catch (IOException e) {
+            int fails = failCounts.merge(relay.getFingerprint(), 1, Integer::sum);
+            if (fails >= MAX_RELAY_FAILURES) {
+                knownRelays.remove(relay);
+                failCounts.remove(relay.getFingerprint());
+                LOG.warn("Relay %s removed after %d consecutive failures", relay.getFingerprint().substring(0, 8), fails);
+            }
+            throw e;
+        }
+    }
+
+    private void authenticateWithRelay(Socket socket) throws IOException {
+        DataInputStream in = new DataInputStream(socket.getInputStream());
+        DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+
+        int nonceLen = in.readInt();
+        if (nonceLen <= 0 || nonceLen > 64) {
+            throw new IOException("Invalid auth challenge size: " + nonceLen);
+        }
+        byte[] nonce = new byte[nonceLen];
+        in.readFully(nonce);
+
+        try {
+            Signature signer = Signature.getInstance(SIGNATURE_ALGORITHM);
+            signer.initSign(localIdentity.getPrivateKey());
+            signer.update(nonce);
+            byte[] signature = signer.sign();
+
+            out.writeInt(signature.length);
+            out.write(signature);
+            out.writeInt(localIdentity.getPublicKey().getEncoded().length);
+            out.write(localIdentity.getPublicKey().getEncoded());
+            out.flush();
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("Failed to authenticate with relay: " + e.getMessage(), e);
+        }
     }
 
     private CircuitHop createHop(RelayInfo relay, Socket socket, int circuitId, boolean isFirst) throws IOException {

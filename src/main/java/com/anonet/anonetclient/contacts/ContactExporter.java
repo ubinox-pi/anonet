@@ -18,6 +18,8 @@
 
 package com.anonet.anonetclient.contacts;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -32,6 +34,8 @@ import java.util.Base64;
 import java.util.List;
 
 public final class ContactExporter {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(ContactExporter.class);
 
     private static final String EXPORT_HEADER = "ANONET_CONTACTS_V1";
     private static final String FIELD_SEPARATOR = "|";
@@ -58,8 +62,10 @@ public final class ContactExporter {
                 writer.write(RECORD_SEPARATOR);
             }
         } catch (IOException e) {
+            LOG.error("Failed to export contacts to %s", outputPath);
             throw new ContactException("Failed to export contacts", e);
         }
+        LOG.info("Exported %d contacts to %s", contacts.size(), outputPath);
     }
 
     public List<Contact> importFromFile(Path inputPath) throws ContactException {
@@ -88,11 +94,13 @@ public final class ContactExporter {
                 }
             }
         } catch (IOException e) {
+            LOG.error("Failed to import contacts from %s", inputPath);
             throw new ContactException("Failed to import contacts", e);
         } catch (NumberFormatException e) {
             throw new ContactException("Invalid contacts file: corrupt count", e);
         }
 
+        LOG.info("Imported %d contacts from %s", contacts.size(), inputPath);
         return contacts;
     }
 

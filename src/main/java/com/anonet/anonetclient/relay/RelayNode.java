@@ -19,16 +19,24 @@
 
 package com.anonet.anonetclient.relay;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
 import com.anonet.anonetclient.relay.RelayProtocol.MessageType;
 import com.anonet.anonetclient.relay.RelayProtocol.RelayMessage;
+import com.anonet.anonetclient.security.RateLimiter;
 
 import java.io.Closeable;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.net.BindException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.SecureRandom;
+import java.security.Signature;
+import java.security.spec.X509EncodedKeySpec;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -40,8 +48,12 @@ import java.util.function.Consumer;
 
 public final class RelayNode implements Closeable {
 
+    private static final AnonetLogger LOG = AnonetLogger.get(RelayNode.class);
+
     private static final long SESSION_TIMEOUT_MS = 5 * 60 * 1000;
     private static final int MAX_CONNECTIONS = 100;
+    private static final int AUTH_CHALLENGE_SIZE = 32;
+    private static final String SIGNATURE_ALGORITHM = "SHA256withECDSA";
 
     private final int port;
     private ServerSocket serverSocket;
@@ -50,6 +62,7 @@ public final class RelayNode implements Closeable {
     private final Map<String, ConnectedClient> clients;
     private final Map<String, RelayPair> relayPairs;
     private final AtomicBoolean running;
+    private final RateLimiter rateLimiter;
     private Consumer<String> statusCallback;
 
     public RelayNode(int port) {
@@ -57,6 +70,7 @@ public final class RelayNode implements Closeable {
         this.clients = new ConcurrentHashMap<>();
         this.relayPairs = new ConcurrentHashMap<>();
         this.running = new AtomicBoolean(false);
+        this.rateLimiter = new RateLimiter(10, 1);
     }
 
     public RelayNode() {
@@ -72,7 +86,7 @@ public final class RelayNode implements Closeable {
             return;
         }
 
-        serverSocket = new ServerSocket(port);
+        serverSocket = bindPort(port, 5);
         connectionExecutor = Executors.newFixedThreadPool(MAX_CONNECTIONS, r -> {
             Thread t = new Thread(r, "RelayNode-Worker");
             t.setDaemon(true);
@@ -88,7 +102,8 @@ public final class RelayNode implements Closeable {
         connectionExecutor.submit(this::acceptLoop);
         maintenanceExecutor.scheduleAtFixedRate(this::maintenance, 60, 60, TimeUnit.SECONDS);
 
-        notifyStatus("Relay node started on port " + port);
+        LOG.info("Relay node started on port %d", serverSocket.getLocalPort());
+        notifyStatus("Relay node started on port " + serverSocket.getLocalPort());
     }
 
     public void stop() {
@@ -119,6 +134,8 @@ public final class RelayNode implements Closeable {
             maintenanceExecutor.shutdownNow();
         }
 
+        rateLimiter.shutdown();
+        LOG.info("Relay node stopped");
         notifyStatus("Relay node stopped");
     }
 
@@ -155,11 +172,22 @@ public final class RelayNode implements Closeable {
     }
 
     private void handleClient(Socket socket) {
+        if (!rateLimiter.tryAcquire(socket.getInetAddress())) {
+            LOG.warn("Rate limit exceeded for %s", socket.getInetAddress().getHostAddress());
+            try { socket.close(); } catch (IOException ignored) {}
+            return;
+        }
         ConnectedClient client = null;
         try {
             socket.setSoTimeout(30000);
             DataInputStream input = new DataInputStream(socket.getInputStream());
             DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+
+            if (!authenticateClient(input, output)) {
+                LOG.warn("Authentication failed for %s", socket.getInetAddress().getHostAddress());
+                socket.close();
+                return;
+            }
 
             int length = input.readInt();
             byte[] data = new byte[length];
@@ -177,6 +205,7 @@ public final class RelayNode implements Closeable {
             sendMessage(output, helloAck);
 
             notifyStatus("Client connected: " + client.fingerprint.substring(0, 8));
+            LOG.info("Relay client connected: %s", client.fingerprint.substring(0, 8));
 
             while (running.get() && !socket.isClosed()) {
                 try {
@@ -206,6 +235,42 @@ public final class RelayNode implements Closeable {
         }
     }
 
+    private boolean authenticateClient(DataInputStream input, DataOutputStream output) throws IOException {
+        byte[] nonce = new byte[AUTH_CHALLENGE_SIZE];
+        new SecureRandom().nextBytes(nonce);
+
+        RelayMessage challenge = RelayProtocol.createAuthChallenge(nonce);
+        sendMessage(output, challenge);
+
+        int length = input.readInt();
+        if (length <= 0 || length > RelayProtocol.MAX_MESSAGE_SIZE) {
+            return false;
+        }
+        byte[] data = new byte[length];
+        input.readFully(data);
+        RelayMessage response = RelayMessage.fromBytes(data);
+
+        if (response.type != MessageType.AUTH_RESPONSE) {
+            return false;
+        }
+
+        try {
+            byte[] signature = RelayProtocol.parseAuthResponseSignature(response.payload);
+            byte[] publicKeyBytes = RelayProtocol.parseAuthResponsePublicKey(response.payload);
+
+            KeyFactory keyFactory = KeyFactory.getInstance("EC");
+            PublicKey publicKey = keyFactory.generatePublic(new X509EncodedKeySpec(publicKeyBytes));
+
+            Signature verifier = Signature.getInstance(SIGNATURE_ALGORITHM);
+            verifier.initVerify(publicKey);
+            verifier.update(nonce);
+            return verifier.verify(signature);
+        } catch (Exception e) {
+            LOG.warn("Auth verification error: %s", e.getMessage());
+            return false;
+        }
+    }
+
     private void handleMessage(ConnectedClient sender, RelayMessage message) throws IOException {
         sender.lastActivity = System.currentTimeMillis();
 
@@ -226,6 +291,7 @@ public final class RelayNode implements Closeable {
         ConnectedClient target = clients.get(targetFingerprint);
 
         if (target == null) {
+            LOG.debug("Relay request rejected: peer %s not found", targetFingerprint.substring(0, 8));
             RelayMessage reject = RelayProtocol.createReject(message.sessionId, "Peer not found");
             sendMessage(sender.output, reject);
             return;
@@ -241,6 +307,7 @@ public final class RelayNode implements Closeable {
 
         notifyStatus("Relay established: " + sender.fingerprint.substring(0, 8) +
                     " <-> " + targetFingerprint.substring(0, 8));
+        LOG.info("Relay established: %s <-> %s", sender.fingerprint.substring(0, 8), targetFingerprint.substring(0, 8));
     }
 
     private void handleData(ConnectedClient sender, RelayMessage message) throws IOException {
@@ -301,6 +368,7 @@ public final class RelayNode implements Closeable {
                 } catch (IOException ignored) {
                 }
                 notifyStatus("Client timed out: " + client.fingerprint.substring(0, 8));
+                LOG.debug("Client timed out: %s", client.fingerprint.substring(0, 8));
                 return true;
             }
             return false;
@@ -311,6 +379,22 @@ public final class RelayNode implements Closeable {
         if (statusCallback != null) {
             statusCallback.accept(status);
         }
+    }
+
+    public int getActualPort() {
+        return serverSocket != null ? serverSocket.getLocalPort() : port;
+    }
+
+    private ServerSocket bindPort(int preferredPort, int maxRetries) throws IOException {
+        for (int i = 0; i <= maxRetries; i++) {
+            try {
+                return new ServerSocket(preferredPort + i);
+            } catch (BindException e) {
+                if (i == maxRetries) throw e;
+                LOG.warn("Port %d in use, trying %d", preferredPort + i, preferredPort + i + 1);
+            }
+        }
+        throw new IOException("No available port");
     }
 
     private static class ConnectedClient implements Closeable {

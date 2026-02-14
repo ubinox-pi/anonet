@@ -20,6 +20,7 @@
 package com.anonet.anonetclient.relay;
 
 import com.anonet.anonetclient.identity.LocalIdentity;
+import com.anonet.anonetclient.logging.AnonetLogger;
 import com.anonet.anonetclient.relay.RelayProtocol.MessageType;
 import com.anonet.anonetclient.relay.RelayProtocol.RelayMessage;
 
@@ -29,6 +30,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.security.Signature;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -37,8 +39,11 @@ import java.util.function.Consumer;
 
 public final class RelayClient implements Closeable {
 
+    private static final AnonetLogger LOG = AnonetLogger.get(RelayClient.class);
+
     private static final int CONNECT_TIMEOUT_MS = 10000;
     private static final int READ_TIMEOUT_MS = 30000;
+    private static final String SIGNATURE_ALGORITHM = "SHA256withECDSA";
 
     private final LocalIdentity identity;
     private final InetSocketAddress relayAddress;
@@ -72,6 +77,12 @@ public final class RelayClient implements Closeable {
         inputStream = new DataInputStream(socket.getInputStream());
         outputStream = new DataOutputStream(socket.getOutputStream());
 
+        RelayMessage challengeMsg = receiveMessage();
+        if (challengeMsg.type != MessageType.AUTH_CHALLENGE) {
+            throw new IOException("Expected AUTH_CHALLENGE, got " + challengeMsg.type);
+        }
+        respondToChallenge(challengeMsg.payload);
+
         session = new RelaySession(identity.getFingerprint(), identity.getPublicKey().getEncoded());
 
         RelayMessage hello = RelayProtocol.createHello(
@@ -91,6 +102,7 @@ public final class RelayClient implements Closeable {
         connected.set(true);
 
         startReceiveThread();
+        LOG.info("Connected to relay: %s", relayAddress);
         notifyStatus("Connected to relay: " + relayAddress);
 
         return true;
@@ -106,6 +118,7 @@ public final class RelayClient implements Closeable {
 
         session.setState(RelaySession.State.WAITING_FOR_PEER);
         session.setPeerFingerprint(targetFingerprint);
+        LOG.info("Requesting relay connection to peer: %s", targetFingerprint.substring(0, 8));
         notifyStatus("Requesting connection to peer: " + targetFingerprint.substring(0, 8));
 
         return true;
@@ -195,6 +208,7 @@ public final class RelayClient implements Closeable {
             session.close();
         }
 
+        LOG.info("Relay client closed");
         notifyStatus("Relay client closed");
     }
 
@@ -206,6 +220,7 @@ public final class RelayClient implements Closeable {
                     handleMessage(message);
                 } catch (IOException e) {
                     if (!closed.get()) {
+                        LOG.error("Relay receive error: %s", e.getMessage());
                         notifyStatus("Receive error: " + e.getMessage());
                         connected.set(false);
                     }
@@ -270,6 +285,21 @@ public final class RelayClient implements Closeable {
         byte[] data = new byte[length];
         inputStream.readFully(data);
         return RelayMessage.fromBytes(data);
+    }
+
+    private void respondToChallenge(byte[] nonce) throws IOException {
+        try {
+            Signature signer = Signature.getInstance(SIGNATURE_ALGORITHM);
+            signer.initSign(identity.getPrivateKey());
+            signer.update(nonce);
+            byte[] signature = signer.sign();
+
+            RelayMessage response = RelayProtocol.createAuthResponse(
+                    signature, identity.getPublicKey().getEncoded());
+            sendMessage(response);
+        } catch (Exception e) {
+            throw new IOException("Failed to respond to auth challenge: " + e.getMessage(), e);
+        }
     }
 
     private void notifyStatus(String status) {

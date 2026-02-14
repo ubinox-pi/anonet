@@ -254,7 +254,7 @@ public final class SettingsDialog {
 
         public static Settings defaults() {
             Path defaultDownload = Paths.get(System.getProperty("user.home"), ".anonet", "downloads");
-            return new Settings(true, false, false, true, 5, "Dark (Default)", defaultDownload);
+            return new Settings(true, true, false, true, 5, "Dark (Default)", defaultDownload);
         }
 
         public boolean isAutoStartDht() { return autoStartDht; }

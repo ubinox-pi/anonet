@@ -22,6 +22,7 @@ import com.anonet.anonetclient.dht.DhtClient;
 import com.anonet.anonetclient.dht.PeerAnnouncement;
 import com.anonet.anonetclient.identity.AnonetId;
 import com.anonet.anonetclient.identity.Username;
+import com.anonet.anonetclient.logging.AnonetLogger;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -36,6 +37,8 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 public final class ContactManager {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(ContactManager.class);
 
     private final ContactStorage storage;
     private final List<Contact> contacts;
@@ -69,10 +72,12 @@ public final class ContactManager {
         List<Contact> loaded = storage.load();
         contacts.clear();
         contacts.addAll(loaded);
+        LOG.info("Loaded %d contacts", contacts.size());
     }
 
     public void save() throws ContactException {
         storage.save(new ArrayList<>(contacts));
+        LOG.debug("Saved %d contacts", contacts.size());
     }
 
     public Contact addContact(String displayName, String username, String fingerprint, PublicKey publicKey) throws ContactException {
@@ -85,6 +90,7 @@ public final class ContactManager {
         contacts.add(contact);
         save();
         notifyAdd(contact);
+        LOG.info("Added contact: %s (%s)", displayName, fingerprint.substring(0, 8));
         return contact;
     }
 
@@ -100,6 +106,7 @@ public final class ContactManager {
             throw new ContactException("DHT client not available");
         }
 
+        LOG.info("Looking up contact in DHT: %s", usernameQuery);
         try {
             var future = dhtClient.lookup(usernameQuery);
             var announcementOpt = future.get(10, java.util.concurrent.TimeUnit.SECONDS);
@@ -115,6 +122,7 @@ public final class ContactManager {
 
             return addContact(displayName, username, fingerprint, publicKey);
         } catch (Exception e) {
+            LOG.error("Failed to find peer in DHT: %s", usernameQuery);
             throw new ContactException("Failed to find peer in DHT", e);
         }
     }
@@ -123,6 +131,7 @@ public final class ContactManager {
         if (contacts.remove(contact)) {
             save();
             notifyRemove(contact);
+            LOG.info("Removed contact: %s", contact.getDisplayName());
         }
     }
 
@@ -294,13 +303,16 @@ public final class ContactManager {
     }
 
     public void importContacts(List<Contact> newContacts) throws ContactException {
+        int imported = 0;
         for (Contact contact : newContacts) {
             if (findByFingerprint(contact.getFingerprint()).isEmpty()) {
                 contacts.add(contact);
                 notifyAdd(contact);
+                imported++;
             }
         }
         save();
+        LOG.info("Imported %d new contacts (skipped %d duplicates)", imported, newContacts.size() - imported);
     }
 
     public List<Contact> exportContacts() {

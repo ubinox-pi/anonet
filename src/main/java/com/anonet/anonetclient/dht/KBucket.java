@@ -19,6 +19,8 @@
 
 package com.anonet.anonetclient.dht;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.net.InetSocketAddress;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -28,6 +30,8 @@ import java.util.Optional;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public final class KBucket {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(KBucket.class);
 
     public static final int K = 20; // Maximum nodes per bucket
     public static final long STALE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
@@ -67,6 +71,7 @@ public final class KBucket {
             }
 
             // Bucket is full, return oldest for ping check
+            LOG.trace("Bucket %d full (%d/%d), returning oldest for ping check", bucketIndex, contacts.size(), K);
             return Optional.of(contacts.get(0));
 
         } finally {
@@ -82,6 +87,7 @@ public final class KBucket {
             }
             contacts.add(newContact);
             lastUpdated = Instant.now();
+            LOG.debug("Replaced oldest contact in bucket %d with %s", bucketIndex, newContact.getNodeId().toShortHex());
         } finally {
             lock.writeLock().unlock();
         }
@@ -182,6 +188,16 @@ public final class KBucket {
 
     public boolean isFull() {
         return size() >= K;
+    }
+
+    public void clear() {
+        lock.writeLock().lock();
+        try {
+            contacts.clear();
+            lastUpdated = Instant.now();
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     public int getBucketIndex() {

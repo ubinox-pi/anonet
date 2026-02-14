@@ -20,19 +20,27 @@
 package com.anonet.anonetclient.onion;
 
 import com.anonet.anonetclient.identity.LocalIdentity;
+import com.anonet.anonetclient.logging.AnonetLogger;
 import com.anonet.anonetclient.onion.OnionProtocol.OnionCell;
 import com.anonet.anonetclient.onion.OnionProtocol.Command;
 import com.anonet.anonetclient.onion.OnionProtocol.RelayCell;
 import com.anonet.anonetclient.onion.OnionProtocol.RelayCommand;
+import com.anonet.anonetclient.security.RateLimiter;
 
 import java.io.Closeable;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.security.KeyFactory;
 import java.security.KeyPair;
+import java.security.PublicKey;
+import java.security.SecureRandom;
+import java.security.Signature;
+import java.security.spec.X509EncodedKeySpec;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -42,8 +50,12 @@ import java.util.function.Consumer;
 
 public final class OnionRelay implements Closeable {
 
+    private static final AnonetLogger LOG = AnonetLogger.get(OnionRelay.class);
+
     public static final int DEFAULT_PORT = 51823;
     public static final int MAX_CIRCUITS = 1000;
+    private static final int AUTH_CHALLENGE_SIZE = 32;
+    private static final String SIGNATURE_ALGORITHM = "SHA256withECDSA";
 
     private final LocalIdentity identity;
     private final int port;
@@ -51,6 +63,7 @@ public final class OnionRelay implements Closeable {
     private ServerSocket serverSocket;
     private ExecutorService executor;
     private final AtomicBoolean running;
+    private final RateLimiter rateLimiter;
     private Consumer<String> statusCallback;
 
     public OnionRelay(LocalIdentity identity, int port) {
@@ -58,6 +71,7 @@ public final class OnionRelay implements Closeable {
         this.port = port;
         this.circuits = new ConcurrentHashMap<>();
         this.running = new AtomicBoolean(false);
+        this.rateLimiter = new RateLimiter(10, 1);
     }
 
     public OnionRelay(LocalIdentity identity) {
@@ -73,7 +87,7 @@ public final class OnionRelay implements Closeable {
             return;
         }
 
-        serverSocket = new ServerSocket(port);
+        serverSocket = bindPort(port, 5);
         executor = Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "OnionRelay-Worker");
             t.setDaemon(true);
@@ -81,7 +95,8 @@ public final class OnionRelay implements Closeable {
         });
 
         executor.submit(this::acceptLoop);
-        notifyStatus("Onion relay started on port " + port);
+        LOG.info("Onion relay started on port %d", serverSocket.getLocalPort());
+        notifyStatus("Onion relay started on port " + serverSocket.getLocalPort());
     }
 
     public void stop() {
@@ -105,6 +120,8 @@ public final class OnionRelay implements Closeable {
             executor.shutdownNow();
         }
 
+        rateLimiter.shutdown();
+        LOG.info("Onion relay stopped");
         notifyStatus("Onion relay stopped");
     }
 
@@ -128,6 +145,7 @@ public final class OnionRelay implements Closeable {
                 executor.submit(() -> handleConnection(clientSocket));
             } catch (IOException e) {
                 if (running.get()) {
+                    LOG.error("Accept error: %s", e.getMessage());
                     notifyStatus("Accept error: " + e.getMessage());
                 }
             }
@@ -135,10 +153,21 @@ public final class OnionRelay implements Closeable {
     }
 
     private void handleConnection(Socket socket) {
+        if (!rateLimiter.tryAcquire(socket.getInetAddress())) {
+            LOG.warn("Rate limit exceeded for %s", socket.getInetAddress().getHostAddress());
+            try { socket.close(); } catch (IOException ignored) {}
+            return;
+        }
         try {
             socket.setSoTimeout(30000);
             DataInputStream in = new DataInputStream(socket.getInputStream());
             DataOutputStream out = new DataOutputStream(socket.getOutputStream());
+
+            if (!authenticateClient(in, out)) {
+                LOG.warn("Onion auth failed for %s", socket.getInetAddress().getHostAddress());
+                socket.close();
+                return;
+            }
 
             while (running.get() && !socket.isClosed()) {
                 byte[] cellData = new byte[OnionProtocol.CELL_SIZE];
@@ -160,6 +189,42 @@ public final class OnionRelay implements Closeable {
         }
     }
 
+    private boolean authenticateClient(DataInputStream in, DataOutputStream out) throws IOException {
+        byte[] nonce = new byte[AUTH_CHALLENGE_SIZE];
+        new SecureRandom().nextBytes(nonce);
+
+        out.writeInt(nonce.length);
+        out.write(nonce);
+        out.flush();
+
+        int sigLen = in.readInt();
+        if (sigLen <= 0 || sigLen > 1024) {
+            return false;
+        }
+        byte[] signature = new byte[sigLen];
+        in.readFully(signature);
+
+        int keyLen = in.readInt();
+        if (keyLen <= 0 || keyLen > 1024) {
+            return false;
+        }
+        byte[] publicKeyBytes = new byte[keyLen];
+        in.readFully(publicKeyBytes);
+
+        try {
+            KeyFactory keyFactory = KeyFactory.getInstance("EC");
+            PublicKey publicKey = keyFactory.generatePublic(new X509EncodedKeySpec(publicKeyBytes));
+
+            Signature verifier = Signature.getInstance(SIGNATURE_ALGORITHM);
+            verifier.initVerify(publicKey);
+            verifier.update(nonce);
+            return verifier.verify(signature);
+        } catch (Exception e) {
+            LOG.warn("Onion auth verification error: %s", e.getMessage());
+            return false;
+        }
+    }
+
     private void processCell(Socket socket, DataInputStream in, DataOutputStream out, OnionCell cell) throws IOException {
         int circuitId = cell.getCircuitId();
 
@@ -176,6 +241,7 @@ public final class OnionRelay implements Closeable {
         int circuitId = cell.getCircuitId();
 
         if (circuits.size() >= MAX_CIRCUITS) {
+            LOG.warn("Max circuits reached (%d), rejecting new circuit %d", MAX_CIRCUITS, circuitId);
             sendCell(out, OnionProtocol.destroyCell(circuitId));
             return;
         }
@@ -191,6 +257,7 @@ public final class OnionRelay implements Closeable {
         OnionCell createdCell = OnionProtocol.createdCell(circuitId, keyPair.getPublic().getEncoded());
         sendCell(out, createdCell);
 
+        LOG.info("Circuit %d created", circuitId);
         notifyStatus("Circuit " + circuitId + " created");
     }
 
@@ -254,6 +321,7 @@ public final class OnionRelay implements Closeable {
             }
 
         } catch (Exception e) {
+            LOG.error("Extend failed for circuit %d: %s", circuit.getCircuitId(), e.getMessage());
             notifyStatus("Extend failed: " + e.getMessage());
         }
     }
@@ -290,6 +358,22 @@ public final class OnionRelay implements Closeable {
         if (statusCallback != null) {
             statusCallback.accept(status);
         }
+    }
+
+    public int getActualPort() {
+        return serverSocket != null ? serverSocket.getLocalPort() : port;
+    }
+
+    private ServerSocket bindPort(int preferredPort, int maxRetries) throws IOException {
+        for (int i = 0; i <= maxRetries; i++) {
+            try {
+                return new ServerSocket(preferredPort + i);
+            } catch (BindException e) {
+                if (i == maxRetries) throw e;
+                LOG.warn("Port %d in use, trying %d", preferredPort + i, preferredPort + i + 1);
+            }
+        }
+        throw new IOException("No available port");
     }
 
     private static class RelayCircuit {

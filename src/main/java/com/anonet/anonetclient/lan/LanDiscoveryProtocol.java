@@ -34,7 +34,11 @@ public final class LanDiscoveryProtocol {
     }
 
     public static byte[] createDiscoveryMessage(String fingerprint) {
-        String message = PROTOCOL_MAGIC + FIELD_SEPARATOR + fingerprint;
+        return createDiscoveryMessage(fingerprint, 0);
+    }
+
+    public static byte[] createDiscoveryMessage(String fingerprint, int dhtPort) {
+        String message = PROTOCOL_MAGIC + FIELD_SEPARATOR + fingerprint + FIELD_SEPARATOR + dhtPort;
         return message.getBytes(StandardCharsets.UTF_8);
     }
 
@@ -42,7 +46,7 @@ public final class LanDiscoveryProtocol {
         String message = new String(data, 0, length, StandardCharsets.UTF_8);
         String[] parts = message.split("\\" + FIELD_SEPARATOR);
 
-        if (parts.length != 2) {
+        if (parts.length < 2) {
             return null;
         }
 
@@ -55,19 +59,33 @@ public final class LanDiscoveryProtocol {
             return null;
         }
 
-        return new DiscoveryMessage(fingerprint);
+        int dhtPort = 0;
+        if (parts.length >= 3) {
+            try {
+                dhtPort = Integer.parseInt(parts[2].trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+
+        return new DiscoveryMessage(fingerprint, dhtPort);
     }
 
     public static final class DiscoveryMessage {
 
         private final String fingerprint;
+        private final int dhtPort;
 
-        public DiscoveryMessage(String fingerprint) {
+        public DiscoveryMessage(String fingerprint, int dhtPort) {
             this.fingerprint = fingerprint;
+            this.dhtPort = dhtPort;
         }
 
         public String getFingerprint() {
             return fingerprint;
+        }
+
+        public int getDhtPort() {
+            return dhtPort;
         }
     }
 }

@@ -20,6 +20,7 @@
 package com.anonet.anonetclient.transfer;
 
 import com.anonet.anonetclient.crypto.session.SecureChannel;
+import com.anonet.anonetclient.logging.AnonetLogger;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -27,6 +28,9 @@ import java.io.IOException;
 import java.net.Socket;
 
 public final class SecureSocketChannel implements AutoCloseable {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(SecureSocketChannel.class);
+    private static final int MAX_MESSAGE_SIZE = 256 * 1024;
 
     private final Socket socket;
     private final DataInputStream inputStream;
@@ -53,6 +57,9 @@ public final class SecureSocketChannel implements AutoCloseable {
     public ReceivedMessage receiveMessage() throws IOException {
         byte messageType = inputStream.readByte();
         int length = inputStream.readInt();
+        if (length <= 0 || length > MAX_MESSAGE_SIZE) {
+            throw new IOException("Invalid message size: " + length);
+        }
         byte[] encryptedBytes = new byte[length];
         inputStream.readFully(encryptedBytes);
 
@@ -70,6 +77,9 @@ public final class SecureSocketChannel implements AutoCloseable {
 
     public byte[] receiveRaw() throws IOException {
         int length = inputStream.readInt();
+        if (length <= 0 || length > MAX_MESSAGE_SIZE) {
+            throw new IOException("Invalid raw message size: " + length);
+        }
         byte[] data = new byte[length];
         inputStream.readFully(data);
         return data;
@@ -81,6 +91,7 @@ public final class SecureSocketChannel implements AutoCloseable {
 
     @Override
     public void close() {
+        LOG.debug("Closing secure socket channel");
         secureChannel.close();
         try {
             if (!socket.isClosed()) {

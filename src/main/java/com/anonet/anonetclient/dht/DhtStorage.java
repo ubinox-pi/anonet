@@ -19,11 +19,15 @@
 
 package com.anonet.anonetclient.dht;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class DhtStorage {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(DhtStorage.class);
 
     private static final long DEFAULT_EXPIRY_MS = 60 * 60 * 1000;
     private static final int MAX_ENTRIES = 10000;
@@ -46,6 +50,7 @@ public final class DhtStorage {
 
     public void store(NodeId key, byte[] value, long timestamp) {
         if (storage.size() >= MAX_ENTRIES) {
+            LOG.debug("Storage full (%d entries), evicting expired", storage.size());
             evictExpired();
         }
         storage.put(key, new StoredValue(value, timestamp));

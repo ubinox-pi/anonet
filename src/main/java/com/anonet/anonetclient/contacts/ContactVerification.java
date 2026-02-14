@@ -18,11 +18,15 @@
 
 package com.anonet.anonetclient.contacts;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.security.MessageDigest;
 import java.security.PublicKey;
 import java.security.Signature;
 
 public final class ContactVerification {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(ContactVerification.class);
 
     private static final String SIGNATURE_ALGORITHM = "SHA256withECDSA";
     private static final String HASH_ALGORITHM = "SHA-256";
@@ -37,8 +41,11 @@ public final class ContactVerification {
             Signature sig = Signature.getInstance(SIGNATURE_ALGORITHM);
             sig.initVerify(publicKey);
             sig.update(data);
-            return sig.verify(signature);
+            boolean valid = sig.verify(signature);
+            LOG.debug("Signature verification: %s", valid ? "valid" : "invalid");
+            return valid;
         } catch (Exception e) {
+            LOG.warn("Signature verification failed: %s", e.getMessage());
             return false;
         }
     }
@@ -94,10 +101,13 @@ public final class ContactVerification {
         boolean discriminatorValid = verifyDiscriminatorMatch(contact.getPublicKey(), contact.getUsername());
 
         if (fingerprintValid && discriminatorValid) {
+            LOG.info("Contact verified: %s", contact.getDisplayName());
             return new VerificationResult(true, "Contact verified successfully");
         } else if (!fingerprintValid) {
+            LOG.warn("Fingerprint mismatch for contact: %s", contact.getDisplayName());
             return new VerificationResult(false, "Fingerprint mismatch - possible impersonation");
         } else {
+            LOG.warn("Discriminator mismatch for contact: %s", contact.getDisplayName());
             return new VerificationResult(false, "Discriminator mismatch - username may be spoofed");
         }
     }

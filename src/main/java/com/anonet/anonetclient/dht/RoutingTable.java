@@ -19,11 +19,15 @@
 
 package com.anonet.anonetclient.dht;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 public final class RoutingTable {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(RoutingTable.class);
 
     private static final int NUM_BUCKETS = NodeId.ID_LENGTH_BITS;
 
@@ -47,12 +51,17 @@ public final class RoutingTable {
             return Optional.empty();
         }
         int bucketIndex = getBucketIndex(contact.getNodeId());
-        return buckets[bucketIndex].addOrUpdate(contact);
+        Optional<DhtContact> displaced = buckets[bucketIndex].addOrUpdate(contact);
+        if (displaced.isPresent()) {
+            LOG.trace("Bucket %d full, returning oldest for ping check", bucketIndex);
+        }
+        return displaced;
     }
 
     public void removeContact(NodeId nodeId) {
         int bucketIndex = getBucketIndex(nodeId);
         buckets[bucketIndex].remove(nodeId);
+        LOG.debug("Removed contact from bucket %d, nodeId=%s", bucketIndex, nodeId.toShortHex());
     }
 
     public void markSeen(NodeId nodeId) {
@@ -136,6 +145,12 @@ public final class RoutingTable {
             }
         }
         return count;
+    }
+
+    public void clear() {
+        for (KBucket bucket : buckets) {
+            bucket.clear();
+        }
     }
 
     private int getBucketIndex(NodeId nodeId) {

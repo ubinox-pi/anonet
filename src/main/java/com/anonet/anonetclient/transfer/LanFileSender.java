@@ -20,6 +20,7 @@
 package com.anonet.anonetclient.transfer;
 
 import com.anonet.anonetclient.identity.LocalIdentity;
+import com.anonet.anonetclient.logging.AnonetLogger;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -30,6 +31,8 @@ import java.net.Socket;
 import java.util.function.Consumer;
 
 public final class LanFileSender {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(LanFileSender.class);
 
     private final LocalIdentity localIdentity;
     private final InetAddress peerAddress;
@@ -55,6 +58,8 @@ public final class LanFileSender {
             throw new FileTransferException("File does not exist: " + fileToSend.getAbsolutePath());
         }
 
+        LOG.info("Sending file: %s (%d bytes) to %s:%d", fileToSend.getName(), fileToSend.length(), peerAddress.getHostAddress(), peerPort);
+
         Socket socket = null;
         SecureSocketChannel secureChannel = null;
 
@@ -67,7 +72,9 @@ public final class LanFileSender {
 
             reportProgress(0, fileToSend.length(), 0, 0, TransferProgress.TransferState.HANDSHAKING);
 
-            secureChannel = HandshakeHelper.performSenderHandshake(socket, localIdentity);
+            HandshakeHelper.AuthenticatedChannel authChannel = HandshakeHelper.performSenderHandshake(socket, localIdentity);
+            secureChannel = authChannel.channel();
+            LOG.info("Receiver fingerprint: %s", authChannel.peerFingerprint().substring(0, Math.min(16, authChannel.peerFingerprint().length())));
 
             FileMetadata metadata = new FileMetadata(fileToSend.getName(), fileToSend.length());
             secureChannel.sendMessage(TransferProtocol.MSG_FILE_METADATA, metadata.toBytes());
@@ -86,8 +93,10 @@ public final class LanFileSender {
             }
 
             reportProgress(metadata.getFileSize(), metadata.getFileSize(), metadata.getTotalChunks(), metadata.getTotalChunks(), TransferProgress.TransferState.COMPLETED);
+            LOG.info("File sent successfully: %s", fileToSend.getName());
 
         } catch (IOException e) {
+            LOG.error("File transfer failed: %s", e.getMessage());
             reportProgress(0, fileToSend.length(), 0, 0, TransferProgress.TransferState.FAILED);
             throw new FileTransferException("File transfer failed: " + e.getMessage(), e);
         } finally {

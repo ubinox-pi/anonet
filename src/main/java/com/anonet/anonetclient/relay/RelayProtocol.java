@@ -38,6 +38,8 @@ public final class RelayProtocol {
         CLOSE(0x07),
         PING(0x08),
         PONG(0x09),
+        AUTH_CHALLENGE(0x10),
+        AUTH_RESPONSE(0x11),
         ERROR(0xFF);
 
         private final int code;
@@ -148,5 +150,34 @@ public final class RelayProtocol {
     public static RelayMessage createError(String sessionId, String error) {
         byte[] errorBytes = error.getBytes(StandardCharsets.UTF_8);
         return new RelayMessage(MessageType.ERROR, sessionId, errorBytes);
+    }
+
+    public static RelayMessage createAuthChallenge(byte[] nonce) {
+        return new RelayMessage(MessageType.AUTH_CHALLENGE, "", nonce);
+    }
+
+    public static RelayMessage createAuthResponse(byte[] signature, byte[] identityPublicKey) {
+        ByteBuffer buffer = ByteBuffer.allocate(4 + signature.length + identityPublicKey.length);
+        buffer.putInt(signature.length);
+        buffer.put(signature);
+        buffer.put(identityPublicKey);
+        return new RelayMessage(MessageType.AUTH_RESPONSE, "", buffer.array());
+    }
+
+    public static byte[] parseAuthResponseSignature(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload);
+        int sigLen = buffer.getInt();
+        byte[] signature = new byte[sigLen];
+        buffer.get(signature);
+        return signature;
+    }
+
+    public static byte[] parseAuthResponsePublicKey(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload);
+        int sigLen = buffer.getInt();
+        buffer.position(4 + sigLen);
+        byte[] publicKey = new byte[buffer.remaining()];
+        buffer.get(publicKey);
+        return publicKey;
     }
 }

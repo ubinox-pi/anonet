@@ -18,6 +18,8 @@
 
 package com.anonet.anonetclient.ui;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -28,11 +30,13 @@ import java.nio.file.Paths;
 
 public final class AppSettings {
 
+    private static final AnonetLogger LOG = AnonetLogger.get(AppSettings.class);
+
     private static final String SETTINGS_FILE = "settings.json";
     private final Path settingsPath;
 
     private boolean autoStartDht = true;
-    private boolean enableRelay = false;
+    private boolean enableRelay = true;
     private boolean enableOnion = false;
     private boolean showNotifications = true;
     private boolean firstRun = true;
@@ -60,7 +64,7 @@ public final class AppSettings {
             }
             parseJson(content.toString());
         } catch (IOException e) {
-            // Use defaults
+            LOG.warn("Failed to load settings from %s: %s", settingsPath, e.getMessage());
         }
     }
 
@@ -71,13 +75,13 @@ public final class AppSettings {
                 writer.write(toJson());
             }
         } catch (IOException e) {
-            // Ignore
+            LOG.warn("Failed to save settings to %s: %s", settingsPath, e.getMessage());
         }
     }
 
     private void parseJson(String json) {
         autoStartDht = extractBoolean(json, "autoStartDht", true);
-        enableRelay = extractBoolean(json, "enableRelay", false);
+        enableRelay = extractBoolean(json, "enableRelay", true);
         enableOnion = extractBoolean(json, "enableOnion", false);
         showNotifications = extractBoolean(json, "showNotifications", true);
         firstRun = extractBoolean(json, "firstRun", true);

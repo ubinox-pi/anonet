@@ -46,3 +46,4 @@ build/
 /.claude/
 /.idea/
 /ANONET_PROGRESS_PPT_PROMPT.md
+.gitignore

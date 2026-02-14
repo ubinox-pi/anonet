@@ -114,13 +114,27 @@ public final class LanDiscoveryService {
         return running.get();
     }
 
-    private void onPeerDiscovered(InetAddress address, String fingerprint) {
+    public void setDhtPort(int port) {
+        if (broadcaster != null) {
+            broadcaster.setDhtPort(port);
+        }
+    }
+
+    private void onPeerDiscovered(InetAddress address, String fingerprint, int dhtPort) {
         LanPeer existingPeer = discoveredPeers.get(fingerprint);
 
         if (existingPeer != null) {
             existingPeer.updateLastSeen();
+            if (!existingPeer.getIpAddress().equals(address)) {
+                existingPeer.updateAddress(address);
+                LOG.info("LAN peer %s changed IP to %s", fingerprint.substring(0, 8), address.getHostAddress());
+                notifyPeersChanged();
+            }
+            if (dhtPort > 0 && existingPeer.getDhtPort() != dhtPort) {
+                existingPeer.setDhtPort(dhtPort);
+            }
         } else {
-            LanPeer newPeer = new LanPeer(address, fingerprint);
+            LanPeer newPeer = new LanPeer(address, fingerprint, dhtPort);
             discoveredPeers.put(fingerprint, newPeer);
             notifyPeersChanged();
         }

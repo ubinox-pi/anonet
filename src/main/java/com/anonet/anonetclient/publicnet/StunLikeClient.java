@@ -19,6 +19,8 @@
 
 package com.anonet.anonetclient.publicnet;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -30,6 +32,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class StunLikeClient {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(StunLikeClient.class);
 
     private static final int STUN_TIMEOUT_MS = 3000;
     private static final int STUN_RETRIES = 3;
@@ -55,6 +59,7 @@ public final class StunLikeClient {
     private record StunServer(String host, int port) {}
 
     public static ExternalAddress discoverExternalAddress(DatagramSocket socket) {
+        LOG.debug("Discovering external address");
         ExternalAddress fromAnonetServer = discoverViaAnonetServer(socket);
         if (fromAnonetServer != null) {
             return fromAnonetServer;
@@ -72,6 +77,7 @@ public final class StunLikeClient {
             try {
                 ExternalAddress address = performStunBinding(socket, server);
                 if (address != null) {
+                    LOG.info("External address discovered: %s:%d", address.publicIp(), address.publicPort());
                     return address;
                 }
             } catch (Exception ignored) {

@@ -24,6 +24,7 @@ import com.anonet.anonetclient.crypto.session.SessionKeyAgreement;
 import com.anonet.anonetclient.crypto.session.SessionKeys;
 import com.anonet.anonetclient.crypto.session.SignedEphemeralKey;
 import com.anonet.anonetclient.identity.LocalIdentity;
+import com.anonet.anonetclient.logging.AnonetLogger;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -33,10 +34,15 @@ import java.nio.ByteBuffer;
 
 public final class HandshakeHelper {
 
+    private static final AnonetLogger LOG = AnonetLogger.get(HandshakeHelper.class);
+    private static final int MAX_HANDSHAKE_SIZE = 8192;
+
+    public record AuthenticatedChannel(SecureSocketChannel channel, String peerFingerprint) {}
+
     private HandshakeHelper() {
     }
 
-    public static SecureSocketChannel performSenderHandshake(Socket socket, LocalIdentity localIdentity) throws IOException {
+    public static AuthenticatedChannel performSenderHandshake(Socket socket, LocalIdentity localIdentity) throws IOException {
         DataInputStream in = new DataInputStream(socket.getInputStream());
         DataOutputStream out = new DataOutputStream(socket.getOutputStream());
 
@@ -55,6 +61,9 @@ public final class HandshakeHelper {
         }
 
         int responseLength = in.readInt();
+        if (responseLength <= 0 || responseLength > MAX_HANDSHAKE_SIZE) {
+            throw new FileTransferException("Invalid handshake response size: " + responseLength);
+        }
         byte[] responseData = new byte[responseLength];
         in.readFully(responseData);
 
@@ -62,10 +71,12 @@ public final class HandshakeHelper {
         SessionKeys sessionKeys = agreement.completeKeyAgreement(peerSignedKey);
 
         SecureChannel secureChannel = new SecureChannel(sessionKeys);
-        return new SecureSocketChannel(socket, secureChannel);
+        String peerFingerprint = computeFingerprint(peerSignedKey.getIdentityPublicKey());
+        LOG.info("Sender handshake completed");
+        return new AuthenticatedChannel(new SecureSocketChannel(socket, secureChannel), peerFingerprint);
     }
 
-    public static SecureSocketChannel performReceiverHandshake(Socket socket, LocalIdentity localIdentity) throws IOException {
+    public static AuthenticatedChannel performReceiverHandshake(Socket socket, LocalIdentity localIdentity) throws IOException {
         DataInputStream in = new DataInputStream(socket.getInputStream());
         DataOutputStream out = new DataOutputStream(socket.getOutputStream());
 
@@ -75,6 +86,9 @@ public final class HandshakeHelper {
         }
 
         int initLength = in.readInt();
+        if (initLength <= 0 || initLength > MAX_HANDSHAKE_SIZE) {
+            throw new FileTransferException("Invalid handshake init size: " + initLength);
+        }
         byte[] initData = new byte[initLength];
         in.readFully(initData);
 
@@ -91,7 +105,25 @@ public final class HandshakeHelper {
         out.flush();
 
         SecureChannel secureChannel = new SecureChannel(sessionKeys);
-        return new SecureSocketChannel(socket, secureChannel);
+        String peerFingerprint = computeFingerprint(peerSignedKey.getIdentityPublicKey());
+        LOG.info("Receiver handshake completed");
+        return new AuthenticatedChannel(new SecureSocketChannel(socket, secureChannel), peerFingerprint);
+    }
+
+    private static String computeFingerprint(byte[] publicKeyBytes) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(publicKeyBytes);
+            StringBuilder sb = new StringBuilder();
+            for (byte b : hash) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) sb.append('0');
+                sb.append(hex);
+            }
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new FileTransferException("SHA-256 not available", e);
+        }
     }
 
     private static byte[] serializeSignedKey(SignedEphemeralKey signedKey) {

@@ -19,6 +19,8 @@
 
 package com.anonet.anonetclient.identity;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -35,6 +37,8 @@ import java.util.regex.Pattern;
  * Exports identity to JSON backup files and restores from seed phrases.
  */
 public final class IdentityBackup {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(IdentityBackup.class);
 
     private static final String BACKUP_FILE_EXTENSION = ".anonet-identity";
     private static final DateTimeFormatter TIMESTAMP_FORMAT =
@@ -126,6 +130,7 @@ public final class IdentityBackup {
 
     public static Path exportIdentity(LocalIdentity identity, SeedPhrase seedPhrase,
                                       String displayName, Path exportDirectory) {
+        LOG.info("Exporting identity backup to %s", exportDirectory);
         try {
             Files.createDirectories(exportDirectory);
 
@@ -143,6 +148,7 @@ public final class IdentityBackup {
             String json = backupData.toJson();
             Files.write(backupFile, json.getBytes(StandardCharsets.UTF_8));
 
+            LOG.info("Identity backup saved to %s", backupFile);
             return backupFile;
 
         } catch (IOException e) {
@@ -157,6 +163,7 @@ public final class IdentityBackup {
     }
 
     public static BackupData importIdentity(Path backupFile) {
+        LOG.info("Importing identity backup from %s", backupFile);
         try {
             if (!Files.exists(backupFile)) {
                 throw new IdentityException("Backup file does not exist: " + backupFile);
@@ -185,12 +192,14 @@ public final class IdentityBackup {
     }
 
     public static LocalIdentity restoreFromBackup(Path backupFile) {
+        LOG.info("Restoring identity from backup file");
         BackupData backupData = importIdentity(backupFile);
         SeedPhrase seedPhrase = SeedPhrase.fromWords(backupData.seedPhrase);
         return DeterministicIdentity.deriveFromSeedPhrase(seedPhrase);
     }
 
     public static LocalIdentity restoreFromSeedPhrase(String mnemonic) {
+        LOG.info("Restoring identity from seed phrase mnemonic");
         SeedPhrase seedPhrase = SeedPhrase.fromWords(mnemonic);
         return DeterministicIdentity.deriveFromSeedPhrase(seedPhrase);
     }

@@ -19,7 +19,11 @@
 
 package com.anonet.anonetclient.identity;
 
+import com.anonet.anonetclient.crypto.session.HKDF;
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyFactory;
@@ -34,12 +38,17 @@ import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Arrays;
+import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
  * Manages the local user's identity - creation, persistence, and recovery.
  * Supports deterministic key generation from BIP39 seed phrases.
  */
 public final class IdentityManager {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(IdentityManager.class);
 
     private static final String ANONET_DIRECTORY = ".anonet";
     private static final String PRIVATE_KEY_FILE = "private.key";
@@ -61,19 +70,24 @@ public final class IdentityManager {
     }
 
     public LocalIdentity loadOrCreateIdentity() {
+        LOG.info("Loading or creating identity");
         if (identityExists()) {
+            LOG.info("Identity exists, loading from disk");
             return loadIdentity();
         }
+        LOG.info("No identity found, creating new identity");
         return createAndPersistIdentity();
     }
 
     public LocalIdentity createFromSeedPhrase(SeedPhrase seedPhrase) {
+        LOG.info("Creating identity from seed phrase");
         LocalIdentity identity = DeterministicIdentity.deriveFromSeedPhrase(seedPhrase);
         persistIdentityWithSeed(identity, seedPhrase);
         return identity;
     }
 
     public LocalIdentity restoreFromSeedPhrase(SeedPhrase seedPhrase) {
+        LOG.info("Restoring identity from seed phrase");
         LocalIdentity identity = DeterministicIdentity.deriveFromSeedPhrase(seedPhrase);
         persistIdentityWithSeed(identity, seedPhrase);
         return identity;
@@ -107,6 +121,19 @@ public final class IdentityManager {
 
             KeyFactory keyFactory = KeyFactory.getInstance(KEY_ALGORITHM);
 
+            if (privateKeyBytes.length > 0 && privateKeyBytes[0] != 0x30) {
+                if (!hasSeedHash()) {
+                    throw new IdentityException("Encrypted private key but no seed hash for decryption");
+                }
+                byte[] seedHash = Files.readAllBytes(seedHashPath);
+                privateKeyBytes = decryptPrivateKey(privateKeyBytes, seedHash);
+            } else if (privateKeyBytes.length > 0 && privateKeyBytes[0] == 0x30 && hasSeedHash()) {
+                LOG.warn("Legacy unencrypted private key detected, re-encrypting");
+                byte[] seedHash = Files.readAllBytes(seedHashPath);
+                byte[] encrypted = encryptPrivateKey(privateKeyBytes, seedHash);
+                Files.write(privateKeyPath, encrypted);
+            }
+
             PKCS8EncodedKeySpec privateKeySpec = new PKCS8EncodedKeySpec(privateKeyBytes);
             PrivateKey privateKey = keyFactory.generatePrivate(privateKeySpec);
 
@@ -115,6 +142,7 @@ public final class IdentityManager {
 
             return new LocalIdentity(publicKey, privateKey);
         } catch (IOException e) {
+            LOG.error("Failed to read identity files", e);
             throw new IdentityException("Failed to read identity files", e);
         } catch (NoSuchAlgorithmException e) {
             throw new IdentityException("Key algorithm not supported", e);
@@ -142,16 +170,20 @@ public final class IdentityManager {
             byte[] publicKeyBytes = identity.getPublicKey().getEncoded();
             byte[] seedHash = hashSeed(seedPhrase.toSeed());
 
-            Files.write(privateKeyPath, privateKeyBytes);
+            byte[] encryptedPrivateKey = encryptPrivateKey(privateKeyBytes, seedHash);
+
+            Files.write(privateKeyPath, encryptedPrivateKey);
             Files.write(publicKeyPath, publicKeyBytes);
             Files.write(seedHashPath, seedHash);
 
+            LOG.info("Identity persisted to %s", anonetDirectory);
         } catch (IOException e) {
             throw new IdentityException("Failed to persist identity", e);
         }
     }
 
     public void deleteIdentity() {
+        LOG.warn("Deleting identity files");
         try {
             Files.deleteIfExists(privateKeyPath);
             Files.deleteIfExists(publicKeyPath);
@@ -172,6 +204,43 @@ public final class IdentityManager {
         LocalIdentity identity = loadIdentity();
         return "Fingerprint: " + identity.getFormattedFingerprint() + "\n" +
                "Seed backup: " + (hasSeedHash() ? "Available" : "Not available");
+    }
+
+    private byte[] encryptPrivateKey(byte[] pkcs8Bytes, byte[] seedHash) {
+        try {
+            byte[] aesKey = HKDF.deriveKey(seedHash, "anonet-pk-enc".getBytes(StandardCharsets.UTF_8),
+                    "private-key".getBytes(StandardCharsets.UTF_8), 32);
+            byte[] nonce = new byte[12];
+            new SecureRandom().nextBytes(nonce);
+
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            GCMParameterSpec spec = new GCMParameterSpec(128, nonce);
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(aesKey, "AES"), spec);
+            byte[] ciphertext = cipher.doFinal(pkcs8Bytes);
+
+            byte[] result = new byte[nonce.length + ciphertext.length];
+            System.arraycopy(nonce, 0, result, 0, nonce.length);
+            System.arraycopy(ciphertext, 0, result, nonce.length, ciphertext.length);
+            return result;
+        } catch (Exception e) {
+            throw new IdentityException("Failed to encrypt private key", e);
+        }
+    }
+
+    private byte[] decryptPrivateKey(byte[] encrypted, byte[] seedHash) {
+        try {
+            byte[] aesKey = HKDF.deriveKey(seedHash, "anonet-pk-enc".getBytes(StandardCharsets.UTF_8),
+                    "private-key".getBytes(StandardCharsets.UTF_8), 32);
+            byte[] nonce = Arrays.copyOfRange(encrypted, 0, 12);
+            byte[] ciphertext = Arrays.copyOfRange(encrypted, 12, encrypted.length);
+
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            GCMParameterSpec spec = new GCMParameterSpec(128, nonce);
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(aesKey, "AES"), spec);
+            return cipher.doFinal(ciphertext);
+        } catch (Exception e) {
+            throw new IdentityException("Failed to decrypt private key", e);
+        }
     }
 
     private byte[] hashSeed(byte[] seed) {

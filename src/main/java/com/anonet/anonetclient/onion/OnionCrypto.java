@@ -19,13 +19,16 @@
 
 package com.anonet.anonetclient.onion;
 
+import com.anonet.anonetclient.crypto.session.HKDF;
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import javax.crypto.Cipher;
 import javax.crypto.KeyAgreement;
-import javax.crypto.Mac;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -35,15 +38,18 @@ import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.X509EncodedKeySpec;
-import java.util.Arrays;
 
 public final class OnionCrypto {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(OnionCrypto.class);
 
     private static final String CURVE = "secp256r1";
     private static final String CIPHER_ALGORITHM = "AES/GCM/NoPadding";
     private static final int GCM_TAG_BITS = 128;
     private static final int GCM_NONCE_SIZE = 12;
     private static final int AES_KEY_SIZE = 32;
+    private static final int DIGEST_SIZE = 20;
+    private static final byte[] HKDF_SALT = "anonet-onion-v1".getBytes(StandardCharsets.UTF_8);
 
     private final SecretKey forwardKey;
     private final SecretKey backwardKey;
@@ -53,12 +59,10 @@ public final class OnionCrypto {
     private long backwardCounter;
 
     public OnionCrypto(byte[] sharedSecret, boolean isInitiator) {
-        byte[] keyMaterial = deriveKeyMaterial(sharedSecret);
-
-        byte[] fwdKeyBytes = Arrays.copyOfRange(keyMaterial, 0, AES_KEY_SIZE);
-        byte[] bwdKeyBytes = Arrays.copyOfRange(keyMaterial, AES_KEY_SIZE, AES_KEY_SIZE * 2);
-        byte[] fwdDigestBytes = Arrays.copyOfRange(keyMaterial, AES_KEY_SIZE * 2, AES_KEY_SIZE * 2 + 20);
-        byte[] bwdDigestBytes = Arrays.copyOfRange(keyMaterial, AES_KEY_SIZE * 2 + 20, AES_KEY_SIZE * 2 + 40);
+        byte[] fwdKeyBytes = HKDF.deriveKey(sharedSecret, HKDF_SALT, "onion-forward-key".getBytes(StandardCharsets.UTF_8), AES_KEY_SIZE);
+        byte[] bwdKeyBytes = HKDF.deriveKey(sharedSecret, HKDF_SALT, "onion-backward-key".getBytes(StandardCharsets.UTF_8), AES_KEY_SIZE);
+        byte[] fwdDigestBytes = HKDF.deriveKey(sharedSecret, HKDF_SALT, "onion-forward-digest".getBytes(StandardCharsets.UTF_8), DIGEST_SIZE);
+        byte[] bwdDigestBytes = HKDF.deriveKey(sharedSecret, HKDF_SALT, "onion-backward-digest".getBytes(StandardCharsets.UTF_8), DIGEST_SIZE);
 
         if (isInitiator) {
             this.forwardKey = new SecretKeySpec(fwdKeyBytes, "AES");
@@ -100,6 +104,7 @@ public final class OnionCrypto {
             cipher.init(Cipher.ENCRYPT_MODE, key, spec);
             return cipher.doFinal(plaintext);
         } catch (Exception e) {
+            LOG.error("Encryption failed", e);
             throw new OnionException("Encryption failed", e);
         }
     }
@@ -112,6 +117,7 @@ public final class OnionCrypto {
             cipher.init(Cipher.DECRYPT_MODE, key, spec);
             return cipher.doFinal(ciphertext);
         } catch (Exception e) {
+            LOG.error("Decryption failed", e);
             throw new OnionException("Decryption failed", e);
         }
     }
@@ -123,37 +129,11 @@ public final class OnionCrypto {
         return buffer.array();
     }
 
-    private byte[] deriveKeyMaterial(byte[] sharedSecret) {
-        try {
-            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
-            byte[] hash1 = sha256.digest(concat(sharedSecret, new byte[]{0x01}));
-            byte[] hash2 = sha256.digest(concat(sharedSecret, new byte[]{0x02}));
-            byte[] hash3 = sha256.digest(concat(sharedSecret, new byte[]{0x03}));
-            byte[] hash4 = sha256.digest(concat(sharedSecret, new byte[]{0x04}));
-            return concat(hash1, hash2, hash3, hash4);
-        } catch (Exception e) {
-            throw new OnionException("Key derivation failed", e);
-        }
-    }
-
-    private byte[] concat(byte[]... arrays) {
-        int totalLength = 0;
-        for (byte[] arr : arrays) {
-            totalLength += arr.length;
-        }
-        byte[] result = new byte[totalLength];
-        int offset = 0;
-        for (byte[] arr : arrays) {
-            System.arraycopy(arr, 0, result, offset, arr.length);
-            offset += arr.length;
-        }
-        return result;
-    }
-
     public static KeyPair generateKeyPair() {
         try {
             KeyPairGenerator keyGen = KeyPairGenerator.getInstance("EC");
             keyGen.initialize(new ECGenParameterSpec(CURVE), new SecureRandom());
+            LOG.debug("Generated onion key pair");
             return keyGen.generateKeyPair();
         } catch (Exception e) {
             throw new OnionException("Key pair generation failed", e);
@@ -169,6 +149,7 @@ public final class OnionCrypto {
             KeyAgreement keyAgreement = KeyAgreement.getInstance("ECDH");
             keyAgreement.init(privateKey);
             keyAgreement.doPhase(peerPublicKey, true);
+            LOG.debug("Onion ECDH key agreement completed");
             return keyAgreement.generateSecret();
         } catch (Exception e) {
             throw new OnionException("Key agreement failed", e);

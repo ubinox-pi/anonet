@@ -19,6 +19,8 @@
 
 package com.anonet.anonetclient.dht;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -43,6 +45,8 @@ import java.util.function.Consumer;
 
 public final class DhtBootstrap {
 
+    private static final AnonetLogger LOG = AnonetLogger.get(DhtBootstrap.class);
+
     private static final String BOOTSTRAP_MAGIC = "ANONET_DHT_BOOTSTRAP";
     private static final int BOOTSTRAP_PORT = 51819;
     private static final int BROADCAST_INTERVAL_MS = 5000;
@@ -60,12 +64,25 @@ public final class DhtBootstrap {
     private ExecutorService executor;
     private DatagramSocket socket;
     private Consumer<String> statusCallback;
+    private volatile int actualDhtPort = DhtNode.DEFAULT_PORT;
 
     public DhtBootstrap(NodeId localNodeId, Path anonetDir) {
         this.localNodeId = localNodeId;
         this.anonetDir = anonetDir;
         this.discoveredNodes = new CopyOnWriteArrayList<>();
         this.running = new AtomicBoolean(false);
+    }
+
+    public void setActualDhtPort(int port) {
+        this.actualDhtPort = port;
+    }
+
+    public List<InetSocketAddress> getDiscoveredNodes() {
+        return new ArrayList<>(discoveredNodes);
+    }
+
+    public void clearDiscoveredNodes() {
+        discoveredNodes.clear();
     }
 
     public void setStatusCallback(Consumer<String> callback) {
@@ -82,9 +99,14 @@ public final class DhtBootstrap {
         for (String addr : HARDCODED_BOOTSTRAP_NODES) {
             try {
                 String[] parts = addr.split(":");
-                nodes.add(new InetSocketAddress(parts[0], Integer.parseInt(parts[1])));
+                InetSocketAddress sockAddr = new InetSocketAddress(parts[0], Integer.parseInt(parts[1]));
+                if (!sockAddr.isUnresolved()) {
+                    nodes.add(sockAddr);
+                } else {
+                    LOG.debug("Skipping unresolvable bootstrap node: %s", addr);
+                }
             } catch (Exception e) {
-                notifyStatus("Invalid bootstrap address: " + addr);
+                LOG.debug("Invalid bootstrap address: %s", addr);
             }
         }
 
@@ -96,18 +118,33 @@ public final class DhtBootstrap {
             return;
         }
 
+        LOG.info("Starting LAN bootstrap discovery");
+
         executor = Executors.newFixedThreadPool(2, r -> {
             Thread t = new Thread(r, "DHT-Bootstrap");
             t.setDaemon(true);
             return t;
         });
 
-        try {
-            socket = new DatagramSocket(BOOTSTRAP_PORT);
-            socket.setBroadcast(true);
-            socket.setSoTimeout(1000);
-        } catch (Exception e) {
-            notifyStatus("Failed to start bootstrap listener: " + e.getMessage());
+        boolean bound = false;
+        for (int attempt = 0; attempt < 10; attempt++) {
+            int portToTry = BOOTSTRAP_PORT + attempt;
+            try {
+                socket = new DatagramSocket(portToTry);
+                socket.setBroadcast(true);
+                socket.setSoTimeout(1000);
+                socket.setReuseAddress(true);
+                LOG.info("Bootstrap listener started on port %d", portToTry);
+                bound = true;
+                break;
+            } catch (Exception e) {
+                LOG.warn("Bootstrap port %d in use, trying next...", portToTry);
+            }
+        }
+
+        if (!bound) {
+            LOG.error("Failed to start bootstrap listener after 10 attempts");
+            notifyStatus("Failed to start bootstrap listener - all ports in use");
             running.set(false);
             return;
         }
@@ -122,6 +159,8 @@ public final class DhtBootstrap {
         if (!running.getAndSet(false)) {
             return;
         }
+
+        LOG.info("LAN bootstrap discovery stopped");
 
         if (socket != null && !socket.isClosed()) {
             socket.close();
@@ -158,9 +197,11 @@ public final class DhtBootstrap {
             json.append("]");
 
             Files.writeString(nodesFile, json.toString());
+            LOG.info("Saved %d nodes to cache", contacts.size());
             notifyStatus("Saved " + contacts.size() + " nodes to cache");
 
         } catch (IOException e) {
+            LOG.error("Failed to save DHT nodes: %s", e.getMessage());
             notifyStatus("Failed to save nodes: " + e.getMessage());
         }
     }
@@ -239,21 +280,27 @@ public final class DhtBootstrap {
                 String message = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
 
                 if (message.startsWith(BOOTSTRAP_MAGIC + "|")) {
-                    String nodeIdHex = message.substring(BOOTSTRAP_MAGIC.length() + 1);
+                    String payload = message.substring(BOOTSTRAP_MAGIC.length() + 1);
+                    String[] parts = payload.split("\\|");
+                    String nodeIdHex = parts[0];
+                    int peerDhtPort = parts.length > 1 ? Integer.parseInt(parts[1]) : DhtNode.DEFAULT_PORT;
                     NodeId senderId = NodeId.fromHex(nodeIdHex);
 
                     if (!senderId.equals(localNodeId)) {
                         InetSocketAddress senderAddr = new InetSocketAddress(
-                            packet.getAddress(), DhtNode.DEFAULT_PORT);
+                            packet.getAddress(), peerDhtPort);
 
                         if (!discoveredNodes.contains(senderAddr)) {
                             discoveredNodes.add(senderAddr);
+                            LOG.info("Discovered DHT node via LAN: %s (DHT port %d)", senderAddr, peerDhtPort);
                             notifyStatus("Discovered DHT node: " + senderAddr);
                         }
                     }
                 }
 
             } catch (java.net.SocketTimeoutException e) {
+            } catch (NumberFormatException e) {
+                LOG.debug("Invalid port in bootstrap message: %s", e.getMessage());
             } catch (IOException e) {
                 if (running.get()) {
                     notifyStatus("Bootstrap listen error: " + e.getMessage());
@@ -275,7 +322,7 @@ public final class DhtBootstrap {
     }
 
     private void broadcast() {
-        String message = BOOTSTRAP_MAGIC + "|" + localNodeId.toHex();
+        String message = BOOTSTRAP_MAGIC + "|" + localNodeId.toHex() + "|" + actualDhtPort;
         byte[] data = message.getBytes(StandardCharsets.UTF_8);
 
         try {

@@ -21,6 +21,7 @@ package com.anonet.anonetclient.publicnet;
 
 import com.anonet.anonetclient.crypto.session.SessionKeys;
 import com.anonet.anonetclient.identity.LocalIdentity;
+import com.anonet.anonetclient.logging.AnonetLogger;
 
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
@@ -33,6 +34,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 public final class NatTraversalService {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(NatTraversalService.class);
 
     private static final int DEFAULT_LOCAL_PORT = 51821;
     private static final int SOCKET_TIMEOUT_MS = 30000;
@@ -80,12 +83,14 @@ public final class NatTraversalService {
             UdpHolePuncher.ConnectionStateCallback stateCallback) {
 
         stateCallback.onStateChanged(ConnectionState.ATTEMPTING_P2P);
+        LOG.info("Starting NAT traversal to peer: %s", remoteEndpoint.getPublicKeyFingerprint().substring(0, 8));
 
         DatagramSocket socket = createSocket();
         activeSocket.set(socket);
 
         StunLikeClient.ExternalAddress externalAddress = discoverExternalAddress(socket);
         if (externalAddress == null) {
+            LOG.warn("STUN discovery failed, cannot determine external address");
             stateCallback.onStateChanged(ConnectionState.FAILED_NAT);
             return new ConnectionResult(false, null, null,
                     PublicConnectionException.FailureReason.STUN_FAILED);
@@ -188,6 +193,7 @@ public final class NatTraversalService {
     }
 
     public void shutdown() {
+        LOG.info("Shutting down NAT traversal service");
         disconnect();
         executor.shutdownNow();
     }

@@ -24,22 +24,40 @@ import java.time.Instant;
 
 public final class LanPeer {
 
-    private final InetAddress ipAddress;
+    private volatile InetAddress ipAddress;
     private final String fingerprint;
     private volatile Instant lastSeen;
+    private volatile int dhtPort;
 
     public LanPeer(InetAddress ipAddress, String fingerprint) {
+        this(ipAddress, fingerprint, 0);
+    }
+
+    public LanPeer(InetAddress ipAddress, String fingerprint, int dhtPort) {
         this.ipAddress = ipAddress;
         this.fingerprint = fingerprint;
         this.lastSeen = Instant.now();
+        this.dhtPort = dhtPort;
     }
 
     public InetAddress getIpAddress() {
         return ipAddress;
     }
 
+    public void updateAddress(InetAddress newAddress) {
+        this.ipAddress = newAddress;
+    }
+
     public String getFingerprint() {
         return fingerprint;
+    }
+
+    public int getDhtPort() {
+        return dhtPort;
+    }
+
+    public void setDhtPort(int port) {
+        this.dhtPort = port;
     }
 
     public String getShortFingerprint() {

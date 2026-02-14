@@ -20,6 +20,7 @@
 package com.anonet.anonetclient.publicnet;
 
 import com.anonet.anonetclient.identity.LocalIdentity;
+import com.anonet.anonetclient.logging.AnonetLogger;
 import com.anonet.anonetclient.transfer.FileMetadata;
 import com.anonet.anonetclient.transfer.TransferProgress;
 
@@ -33,6 +34,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 public final class PublicFileSender {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(PublicFileSender.class);
 
     private static final int CHUNK_SIZE = 1024;
     private static final byte MSG_METADATA = 0x01;
@@ -65,6 +68,7 @@ public final class PublicFileSender {
             throw new IOException("File not found: " + filePath);
         }
 
+        LOG.info("Starting public file transfer: %s (%d bytes)", filePath.getFileName(), Files.size(filePath));
         notifyStatus("Starting file transfer: " + filePath.getFileName());
 
         String fileName = filePath.getFileName().toString();
@@ -113,6 +117,7 @@ public final class PublicFileSender {
         try {
             byte[] finalResponse = channel.receive(30, TimeUnit.SECONDS);
             if (finalResponse != null && finalResponse[0] == MSG_ACK) {
+                LOG.info("Public file transfer completed: %s", filePath.getFileName());
                 notifyStatus("File transfer completed successfully");
                 return true;
             } else if (finalResponse != null && finalResponse[0] == MSG_ERROR) {

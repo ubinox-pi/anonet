@@ -19,6 +19,8 @@
 
 package com.anonet.anonetclient.publicnet;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -32,6 +34,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 public final class ReliableUdp {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(ReliableUdp.class);
 
     public static final int FLAG_SYN = 0x01;
     public static final int FLAG_ACK = 0x02;
@@ -94,6 +98,7 @@ public final class ReliableUdp {
                 if ((response.flags & FLAG_SYN) != 0 && (response.flags & FLAG_ACK) != 0) {
                     sendPacket(FLAG_ACK, new byte[0]);
                     connected.set(true);
+                    LOG.info("RUDP connection established to %s", remoteAddress);
                     notifyStatus("Connection established");
                     return true;
                 }
@@ -105,6 +110,7 @@ public final class ReliableUdp {
         }
 
         notifyStatus("Connection failed after " + MAX_RETRIES + " retries");
+        LOG.warn("RUDP connection failed after %d retries to %s", MAX_RETRIES, remoteAddress);
         return false;
     }
 
@@ -304,6 +310,7 @@ public final class ReliableUdp {
                 if (unacked.retries >= MAX_RETRIES) {
                     unackedPackets.remove(entry.getKey());
                     notifyStatus("Packet " + entry.getKey() + " dropped after max retries");
+                    LOG.warn("Packet %d dropped after %d retries", entry.getKey(), MAX_RETRIES);
                 } else {
                     DatagramPacket packet = new DatagramPacket(unacked.data, unacked.data.length, remoteAddress);
                     socket.send(packet);

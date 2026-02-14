@@ -19,6 +19,8 @@
 
 package com.anonet.anonetclient.identity;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 import java.nio.charset.StandardCharsets;
@@ -36,6 +38,8 @@ import java.util.stream.Collectors;
  * Generates 12-word mnemonic phrases for deterministic identity recovery.
  */
 public final class SeedPhrase {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(SeedPhrase.class);
 
     private static final int ENTROPY_BITS = 128;
     private static final int ENTROPY_BYTES = ENTROPY_BITS / 8;
@@ -56,6 +60,7 @@ public final class SeedPhrase {
     }
 
     public static SeedPhrase generate() {
+        LOG.info("Generating new BIP39 seed phrase");
         SecureRandom random = new SecureRandom();
         byte[] entropy = new byte[ENTROPY_BYTES];
         random.nextBytes(entropy);
@@ -97,6 +102,7 @@ public final class SeedPhrase {
     }
 
     public static SeedPhrase fromWords(List<String> words) {
+        LOG.debug("Parsing seed phrase from words");
         if (words.size() != WORD_COUNT) {
             throw new IllegalArgumentException("Mnemonic must be " + WORD_COUNT + " words");
         }
@@ -138,6 +144,7 @@ public final class SeedPhrase {
     }
 
     public byte[] toSeed(String passphrase) {
+        LOG.debug("Deriving seed with PBKDF2");
         String mnemonic = String.join(" ", words);
         String salt = SALT_PREFIX + passphrase;
 

@@ -19,6 +19,8 @@
 
 package com.anonet.anonetclient.lan;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -29,19 +31,27 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.BiConsumer;
 
 public final class LanListener {
 
+    private static final AnonetLogger LOG = AnonetLogger.get(LanListener.class);
+
     private static final int SOCKET_TIMEOUT_MS = 1000;
+    private static final int MAX_PORT_ATTEMPTS = 10;
 
     private final String ownFingerprint;
-    private final BiConsumer<InetAddress, String> peerDiscoveredCallback;
+    private final PeerDiscoveredCallback peerDiscoveredCallback;
     private final AtomicBoolean running;
     private final ExecutorService executor;
     private DatagramSocket socket;
+    private int actualPort;
 
-    public LanListener(String ownFingerprint, BiConsumer<InetAddress, String> peerDiscoveredCallback) {
+    @FunctionalInterface
+    public interface PeerDiscoveredCallback {
+        void onPeerDiscovered(InetAddress address, String fingerprint, int dhtPort);
+    }
+
+    public LanListener(String ownFingerprint, PeerDiscoveredCallback peerDiscoveredCallback) {
         this.ownFingerprint = ownFingerprint;
         this.peerDiscoveredCallback = peerDiscoveredCallback;
         this.running = new AtomicBoolean(false);
@@ -54,20 +64,39 @@ public final class LanListener {
 
     public void start() {
         if (running.compareAndSet(false, true)) {
-            try {
-                socket = new DatagramSocket(LanDiscoveryProtocol.DISCOVERY_PORT);
-                socket.setBroadcast(true);
-                socket.setSoTimeout(SOCKET_TIMEOUT_MS);
-                executor.submit(this::listen);
-            } catch (SocketException e) {
-                running.set(false);
-                throw new LanDiscoveryException("Failed to start listener on port " + LanDiscoveryProtocol.DISCOVERY_PORT, e);
+            SocketException lastException = null;
+            int basePort = LanDiscoveryProtocol.DISCOVERY_PORT;
+
+            for (int attempt = 0; attempt < MAX_PORT_ATTEMPTS; attempt++) {
+                int portToTry = basePort + attempt;
+                try {
+                    socket = new DatagramSocket(portToTry);
+                    socket.setBroadcast(true);
+                    socket.setSoTimeout(SOCKET_TIMEOUT_MS);
+                    socket.setReuseAddress(true);
+                    actualPort = portToTry;
+                    LOG.info("LAN listener started on port %d", actualPort);
+                    executor.submit(this::listen);
+                    return;
+                } catch (SocketException e) {
+                    lastException = e;
+                    LOG.warn("Port %d in use, trying next port...", portToTry);
+                }
             }
+
+            running.set(false);
+            LOG.error("Failed to start listener after %d attempts", MAX_PORT_ATTEMPTS);
+            throw new LanDiscoveryException("Failed to start listener - all ports in use", lastException);
         }
+    }
+
+    public int getActualPort() {
+        return actualPort;
     }
 
     public void stop() {
         if (running.compareAndSet(true, false)) {
+            LOG.info("LAN listener stopped");
             executor.shutdown();
             try {
                 executor.awaitTermination(2, TimeUnit.SECONDS);
@@ -114,7 +143,8 @@ public final class LanListener {
             return;
         }
 
-        peerDiscoveredCallback.accept(packet.getAddress(), peerFingerprint);
+        LOG.debug("Discovered LAN peer: %s from %s (DHT port: %d)", peerFingerprint, packet.getAddress(), message.getDhtPort());
+        peerDiscoveredCallback.onPeerDiscovered(packet.getAddress(), peerFingerprint, message.getDhtPort());
     }
 
     public boolean isRunning() {

@@ -23,6 +23,7 @@ import com.anonet.anonetclient.crypto.session.SessionKeyAgreement;
 import com.anonet.anonetclient.crypto.session.SessionKeys;
 import com.anonet.anonetclient.crypto.session.SignedEphemeralKey;
 import com.anonet.anonetclient.identity.LocalIdentity;
+import com.anonet.anonetclient.logging.AnonetLogger;
 
 import java.io.IOException;
 import java.net.DatagramPacket;
@@ -34,6 +35,8 @@ import java.util.Base64;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class PublicConnectionAttempt {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(PublicConnectionAttempt.class);
 
     private static final int AUTH_TIMEOUT_MS = 10000;
     private static final String AUTH_INIT_PREFIX = "ANONET_AUTH_INIT|";
@@ -66,6 +69,7 @@ public final class PublicConnectionAttempt {
 
     public boolean authenticate() {
         updateState(ConnectionState.AUTHENTICATING);
+        LOG.info("Starting authentication with peer at %s", remoteAddress);
 
         try {
             socket.setSoTimeout(AUTH_TIMEOUT_MS);
@@ -93,12 +97,15 @@ public final class PublicConnectionAttempt {
 
             authenticated = true;
             updateState(ConnectionState.CONNECTED);
+            LOG.info("Authentication successful with peer at %s", remoteAddress);
             return true;
 
         } catch (PublicConnectionException e) {
+            LOG.error("Authentication failed: %s", e.getMessage());
             updateState(ConnectionState.FAILED_AUTH);
             throw e;
         } catch (Exception e) {
+            LOG.error("Authentication failed", e);
             updateState(ConnectionState.FAILED_AUTH);
             throw new PublicConnectionException("Authentication failed: " + e.getMessage(),
                     PublicConnectionException.FailureReason.AUTHENTICATION_FAILED, e);

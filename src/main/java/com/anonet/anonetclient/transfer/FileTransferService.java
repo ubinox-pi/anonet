@@ -22,6 +22,7 @@ package com.anonet.anonetclient.transfer;
 import com.anonet.anonetclient.identity.LocalIdentity;
 import com.anonet.anonetclient.lan.LanPeer;
 import com.anonet.anonetclient.logging.AnonetLogger;
+import com.anonet.anonetclient.security.RateLimiter;
 
 import java.io.File;
 import java.io.IOException;
@@ -30,6 +31,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 public final class FileTransferService {
 
@@ -40,6 +42,8 @@ public final class FileTransferService {
     private final ExecutorService executorService;
     private LanFileReceiver receiver;
     private volatile boolean receiverRunning;
+    private Function<String, Boolean> trustChecker;
+    private RateLimiter receiverRateLimiter;
 
     public FileTransferService(LocalIdentity localIdentity, Path downloadDirectory) {
         this.localIdentity = localIdentity;
@@ -52,6 +56,18 @@ public final class FileTransferService {
         this.receiverRunning = false;
     }
 
+    public void setTrustChecker(Function<String, Boolean> trustChecker) {
+        this.trustChecker = trustChecker;
+    }
+
+    public void setReceiverRateLimiter(RateLimiter rateLimiter) {
+        this.receiverRateLimiter = rateLimiter;
+    }
+
+    public int getReceiverPort() {
+        return receiver != null ? receiver.getActualPort() : TransferProtocol.TRANSFER_PORT;
+    }
+
     public void startReceiver(Consumer<TransferProgress> progressCallback, Consumer<File> fileReceivedCallback) {
         if (receiverRunning) {
             return;
@@ -60,6 +76,12 @@ public final class FileTransferService {
         receiver = new LanFileReceiver(localIdentity, TransferProtocol.TRANSFER_PORT, downloadDirectory.toFile());
         receiver.setProgressCallback(progressCallback);
         receiver.setFileReceivedCallback(fileReceivedCallback);
+        if (trustChecker != null) {
+            receiver.setTrustChecker(trustChecker);
+        }
+        if (receiverRateLimiter != null) {
+            receiver.setRateLimiter(receiverRateLimiter);
+        }
 
         executorService.submit(() -> {
             try {

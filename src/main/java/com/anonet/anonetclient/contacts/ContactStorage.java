@@ -18,6 +18,8 @@
 
 package com.anonet.anonetclient.contacts;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -32,6 +34,8 @@ import java.util.Base64;
 import java.util.List;
 
 public final class ContactStorage {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(ContactStorage.class);
 
     private static final String CONTACTS_FILE = "contacts.json";
     private final Path storagePath;
@@ -66,7 +70,9 @@ public final class ContactStorage {
             try (BufferedWriter writer = Files.newBufferedWriter(storagePath, StandardCharsets.UTF_8)) {
                 writer.write(json.toString());
             }
+            LOG.info("Saved %d contacts to %s", contacts.size(), storagePath);
         } catch (IOException e) {
+            LOG.error("Failed to save contacts to %s", storagePath);
             throw new ContactException("Failed to save contacts", e);
         }
     }
@@ -83,8 +89,11 @@ public final class ContactStorage {
             while ((line = reader.readLine()) != null) {
                 content.append(line);
             }
-            return parseContacts(content.toString());
+            List<Contact> result = parseContacts(content.toString());
+            LOG.info("Loaded %d contacts from %s", result.size(), storagePath);
+            return result;
         } catch (IOException e) {
+            LOG.error("Failed to load contacts from %s", storagePath);
             throw new ContactException("Failed to load contacts", e);
         }
     }
@@ -242,7 +251,9 @@ public final class ContactStorage {
     public void delete() throws ContactException {
         try {
             Files.deleteIfExists(storagePath);
+            LOG.info("Deleted contacts file: %s", storagePath);
         } catch (IOException e) {
+            LOG.error("Failed to delete contacts file: %s", storagePath);
             throw new ContactException("Failed to delete contacts file", e);
         }
     }

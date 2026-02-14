@@ -19,6 +19,8 @@
 
 package com.anonet.anonetclient.crypto;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
@@ -28,6 +30,7 @@ import java.security.SecureRandom;
 
 public final class CryptoUtils {
 
+    private static final AnonetLogger LOG = AnonetLogger.get(CryptoUtils.class);
     private static final String KEY_ALGORITHM = "EC";
     private static final int EC_KEY_SIZE = 256;
     private static final String HASH_ALGORITHM = "SHA-256";
@@ -36,16 +39,19 @@ public final class CryptoUtils {
     }
 
     public static KeyPair generateKeyPair() {
+        LOG.debug("Generating EC P-256 key pair");
         try {
             KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance(KEY_ALGORITHM);
             keyPairGenerator.initialize(EC_KEY_SIZE, SecureRandom.getInstanceStrong());
             return keyPairGenerator.generateKeyPair();
         } catch (NoSuchAlgorithmException e) {
+            LOG.error("Failed to generate key pair", e);
             throw new CryptoException("Failed to generate key pair", e);
         }
     }
 
     public static String computePublicKeyFingerprint(PublicKey publicKey) {
+        LOG.trace("Computing public key fingerprint");
         try {
             MessageDigest digest = MessageDigest.getInstance(HASH_ALGORITHM);
             byte[] hash = digest.digest(publicKey.getEncoded());

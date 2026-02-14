@@ -20,6 +20,7 @@
 package com.anonet.anonetclient.dht;
 
 import com.anonet.anonetclient.logging.AnonetLogger;
+import com.anonet.anonetclient.security.RateLimiter;
 
 import java.io.IOException;
 import java.net.DatagramPacket;
@@ -58,6 +59,7 @@ public final class DhtNode {
     private final AtomicBoolean running;
     private final AtomicInteger transactionIdCounter;
     private final Map<Integer, PendingQuery> pendingQueries;
+    private final RateLimiter rateLimiter;
     private Consumer<String> statusCallback;
 
     public DhtNode(NodeId nodeId, int port) {
@@ -68,6 +70,7 @@ public final class DhtNode {
         this.running = new AtomicBoolean(false);
         this.transactionIdCounter = new AtomicInteger(1);
         this.pendingQueries = new ConcurrentHashMap<>();
+        this.rateLimiter = new RateLimiter(100, 2);
     }
 
     public DhtNode(NodeId nodeId) {
@@ -79,7 +82,7 @@ public final class DhtNode {
             return;
         }
 
-        socket = new DatagramSocket(port);
+        socket = bindPort(port, 5);
         socket.setSoTimeout(1000);
 
         listenerExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -97,8 +100,8 @@ public final class DhtNode {
         listenerExecutor.submit(this::listenLoop);
         maintenanceExecutor.scheduleAtFixedRate(this::maintenance, 60, 60, TimeUnit.SECONDS);
 
-        LOG.info("DHT node started on port %d with nodeId %s", port, nodeId.toHex().substring(0, 16));
-        notifyStatus("DHT node started on port " + port);
+        LOG.info("DHT node started on port %d with nodeId %s", socket.getLocalPort(), nodeId.toHex().substring(0, 16));
+        notifyStatus("DHT node started on port " + socket.getLocalPort());
     }
 
     public void stop() {
@@ -118,6 +121,7 @@ public final class DhtNode {
             maintenanceExecutor.shutdownNow();
         }
 
+        rateLimiter.shutdown();
         LOG.info("DHT node stopped");
         notifyStatus("DHT node stopped");
     }
@@ -203,6 +207,9 @@ public final class DhtNode {
     }
 
     private void handlePacket(byte[] data, InetSocketAddress sender) {
+        if (!rateLimiter.tryAcquire(sender.getAddress())) {
+            return;
+        }
         try {
             DhtMessage message = DhtMessage.fromBytes(data);
             DhtContact contact = new DhtContact(message.getSenderId(), sender);
@@ -259,10 +266,12 @@ public final class DhtNode {
         if (key != null) {
             Optional<byte[]> value = storage.get(key);
             if (value.isPresent()) {
+                LOG.info("FIND_VALUE hit: key %s found (%d bytes), sending VALUE to %s", key.toShortHex(), value.get().length, sender);
                 DhtMessage valueMsg = DhtMessage.createValue(message.getTransactionId(), nodeId, value.get());
                 sendMessage(valueMsg, sender);
             } else {
                 List<DhtContact> closest = routingTable.getClosestContacts(key, KBucket.K);
+                LOG.debug("FIND_VALUE miss: key %s not in storage (%d entries), sending %d NODES to %s", key.toShortHex(), storage.size(), closest.size(), sender);
                 DhtMessage nodes = DhtMessage.createNodes(message.getTransactionId(), nodeId, closest);
                 sendMessage(nodes, sender);
             }
@@ -270,7 +279,22 @@ public final class DhtNode {
     }
 
     private void handleValue(DhtMessage message, InetSocketAddress sender) {
-        completePendingQuery(message.getTransactionId(), message.getPayload());
+        byte[] payload = message.getPayload();
+        if (payload != null && payload.length > 0) {
+            try {
+                PeerAnnouncement announcement = PeerAnnouncement.fromBytes(payload);
+                if (announcement.verify()) {
+                    storage.store(announcement.getDhtKey(), payload);
+                    storage.store(announcement.getFingerprintKey(), payload);
+                    LOG.info("Stored VALUE from %s: user=%s, usernameKey=%s, fpKey=%s", sender, announcement.getUsername(), announcement.getDhtKey().toShortHex(), announcement.getFingerprintKey().toShortHex());
+                } else {
+                    LOG.warn("VALUE from %s failed verification", sender);
+                }
+            } catch (Exception e) {
+                LOG.warn("Received invalid announcement from %s: %s", sender, e.getMessage());
+            }
+        }
+        completePendingQuery(message.getTransactionId(), payload);
     }
 
     private void handleStore(DhtMessage message, InetSocketAddress sender) {
@@ -293,6 +317,7 @@ public final class DhtNode {
             if (announcement.verify()) {
                 storage.store(announcement.getDhtKey(), message.getPayload());
                 storage.store(announcement.getFingerprintKey(), message.getPayload());
+                LOG.info("Stored ANNOUNCE from %s: user=%s, usernameKey=%s", sender, announcement.getUsername(), announcement.getDhtKey().toShortHex());
                 DhtMessage announced = DhtMessage.createAnnounced(message.getTransactionId(), nodeId, true);
                 sendMessage(announced, sender);
             }
@@ -360,6 +385,21 @@ public final class DhtNode {
             this.timestamp = System.currentTimeMillis();
             this.callback = callback;
         }
+    }
+
+    public int getActualPort() {
+        return socket != null ? socket.getLocalPort() : port;
+    }
+
+    private DatagramSocket bindPort(int preferredPort, int maxRetries) throws SocketException {
+        for (int i = 0; i <= maxRetries; i++) {
+            try {
+                return new DatagramSocket(preferredPort + i);
+            } catch (SocketException e) {
+                if (i == maxRetries) throw e;
+            }
+        }
+        throw new SocketException("No available UDP port");
     }
 
     @Override

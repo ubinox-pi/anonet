@@ -19,6 +19,8 @@
 
 package com.anonet.anonetclient.identity;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import java.math.BigInteger;
 import java.security.AlgorithmParameters;
 import java.security.KeyFactory;
@@ -41,6 +43,8 @@ import java.util.Arrays;
  */
 public final class DeterministicIdentity {
 
+    private static final AnonetLogger LOG = AnonetLogger.get(DeterministicIdentity.class);
+
     private static final String CURVE_NAME = "secp256r1";
     private static final String KEY_ALGORITHM = "EC";
 
@@ -51,6 +55,7 @@ public final class DeterministicIdentity {
     }
 
     public static LocalIdentity deriveFromSeedPhrase(SeedPhrase seedPhrase, String passphrase) {
+        LOG.debug("Deriving identity from seed phrase");
         byte[] seed = seedPhrase.toSeed(passphrase);
         byte[] privateKeyBytes = Arrays.copyOfRange(seed, 0, 32);
         return deriveFromPrivateKeyBytes(privateKeyBytes);
@@ -94,6 +99,7 @@ public final class DeterministicIdentity {
             PublicKey publicKey = keyFactory.generatePublic(publicKeySpec);
 
             KeyPair keyPair = new KeyPair(publicKey, privateKey);
+            LOG.info("Deterministic identity derived successfully");
             return new LocalIdentity(keyPair);
 
         } catch (NoSuchAlgorithmException e) {

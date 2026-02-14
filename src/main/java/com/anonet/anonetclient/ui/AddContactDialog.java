@@ -18,6 +18,7 @@
 
 package com.anonet.anonetclient.ui;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
 import com.anonet.anonetclient.contacts.Contact;
 import com.anonet.anonetclient.contacts.ContactManager;
 import com.anonet.anonetclient.dht.DhtClient;
@@ -45,6 +46,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
 public final class AddContactDialog {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(AddContactDialog.class);
 
     private static final double DIALOG_WIDTH = 450;
     private static final double DIALOG_HEIGHT = 400;
@@ -96,7 +99,10 @@ public final class AddContactDialog {
         Tab pasteTab = new Tab("Paste ANONET ID");
         pasteTab.setContent(createPasteIdPane());
 
-        tabPane.getTabs().addAll(searchTab, pasteTab);
+        Tab directTab = new Tab("Direct Connect");
+        directTab.setContent(createDirectConnectPane());
+
+        tabPane.getTabs().addAll(searchTab, pasteTab, directTab);
 
         statusLabel = new Label("");
         statusLabel.setStyle("-fx-text-fill: #a0a0a0; -fx-font-size: 11;");
@@ -162,6 +168,65 @@ public final class AddContactDialog {
         return pane;
     }
 
+    private VBox createDirectConnectPane() {
+        VBox pane = new VBox(15);
+        pane.setAlignment(Pos.CENTER);
+        pane.setPadding(new Insets(20));
+        pane.setStyle("-fx-background-color: #16213e;");
+
+        Label instruction = new Label("Connect directly to a peer by IP address:");
+        instruction.setStyle("-fx-text-fill: #a0a0a0; -fx-font-size: 11;");
+
+        TextField ipField = new TextField();
+        ipField.setPromptText("192.168.1.100 or public IP");
+        ipField.setMaxWidth(300);
+        ipField.setStyle("-fx-background-color: #0f3460; -fx-text-fill: #ffffff; -fx-font-size: 13; -fx-padding: 10;");
+
+        TextField portField = new TextField("51820");
+        portField.setPromptText("Port (default: 51820)");
+        portField.setMaxWidth(150);
+        portField.setStyle("-fx-background-color: #0f3460; -fx-text-fill: #ffffff; -fx-font-size: 13; -fx-padding: 10;");
+
+        Button connectButton = new Button("🔗 Connect & Search");
+        connectButton.setStyle("-fx-background-color: #16c79a; -fx-text-fill: #ffffff; -fx-font-weight: bold; -fx-cursor: hand;");
+        connectButton.setOnAction(e -> connectDirectly(ipField.getText().trim(), portField.getText().trim()));
+
+        Label hint = new Label("This adds the IP as a DHT node and searches for the user");
+        hint.setStyle("-fx-text-fill: #666666; -fx-font-size: 10;");
+        hint.setWrapText(true);
+
+        pane.getChildren().addAll(instruction, ipField, portField, connectButton, hint);
+        return pane;
+    }
+
+    private void connectDirectly(String ip, String portStr) {
+        if (ip.isEmpty()) {
+            showStatus("Please enter an IP address", true);
+            return;
+        }
+
+        int port;
+        try {
+            port = Integer.parseInt(portStr);
+        } catch (NumberFormatException e) {
+            port = 51820;
+        }
+
+        if (dhtClient == null) {
+            showStatus("DHT client not available", true);
+            return;
+        }
+
+        try {
+            java.net.InetSocketAddress addr = new java.net.InetSocketAddress(ip, port);
+            dhtClient.bootstrap(addr);
+            showStatus("Connected to " + ip + ":" + port + ". Now search by username.", false);
+            LOG.info("Added direct DHT peer: %s:%d", ip, port);
+        } catch (Exception e) {
+            showStatus("Failed to connect: " + e.getMessage(), true);
+        }
+    }
+
     private void searchForUser(String username) {
         if (username.isEmpty()) {
             showStatus("Please enter a username", true);
@@ -172,6 +237,8 @@ public final class AddContactDialog {
             showStatus("DHT network not available", true);
             return;
         }
+
+        LOG.info("Searching DHT for user: %s", username);
 
         showProgress(true);
         showStatus("Searching DHT network...", false);
@@ -227,6 +294,7 @@ public final class AddContactDialog {
             );
 
             showStatus("✓ Contact added successfully!", false);
+            LOG.info("Contact added: %s (%s)", username, announcement.getFingerprint().substring(0, 8));
             statusLabel.setStyle("-fx-text-fill: #16c79a; -fx-font-size: 11;");
 
             if (onContactAdded != null) {
@@ -237,6 +305,7 @@ public final class AddContactDialog {
                 .execute(() -> Platform.runLater(dialogStage::close));
 
         } catch (Exception e) {
+            LOG.error("Failed to add contact: %s", e.getMessage());
             showStatus("Failed to add contact: " + e.getMessage(), true);
         }
     }

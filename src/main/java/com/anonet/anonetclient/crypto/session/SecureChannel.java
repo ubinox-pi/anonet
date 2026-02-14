@@ -19,6 +19,8 @@
 
 package com.anonet.anonetclient.crypto.session;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
+
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
@@ -27,6 +29,8 @@ import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class SecureChannel {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(SecureChannel.class);
 
     private static final String CIPHER_ALGORITHM = "AES/GCM/NoPadding";
     private static final int GCM_TAG_LENGTH_BITS = 128;
@@ -47,6 +51,7 @@ public final class SecureChannel {
     public EncryptedMessage encrypt(byte[] plaintext) {
         checkClosed();
         long sequence = sendSequence.getAndIncrement();
+        LOG.trace("Encrypting message, sequence=%d", sequence);
         byte[] nonce = sessionKeys.computeNonce(sequence);
 
         try {
@@ -65,9 +70,11 @@ public final class SecureChannel {
 
         long expectedSequence = receiveSequence.get();
         if (message.getSequence() < expectedSequence) {
+            LOG.warn("Replay attack detected: sequence %d already processed", message.getSequence());
             throw new SessionCryptoException("Replay attack detected: sequence " + message.getSequence() + " already processed");
         }
         if (message.getSequence() > expectedSequence + 1000) {
+            LOG.warn("Sequence number too far ahead: %d", message.getSequence());
             throw new SessionCryptoException("Sequence number too far ahead: possible attack");
         }
 
@@ -83,6 +90,7 @@ public final class SecureChannel {
 
             return plaintext;
         } catch (AEADBadTagException e) {
+            LOG.error("Authentication failed: message integrity compromised", e);
             throw new SessionCryptoException("Authentication failed: message integrity compromised", e);
         } catch (GeneralSecurityException e) {
             throw new SessionCryptoException("Decryption failed", e);
@@ -93,6 +101,7 @@ public final class SecureChannel {
         if (!closed) {
             closed = true;
             sessionKeys.destroy();
+            LOG.info("Secure channel closed");
         }
     }
 

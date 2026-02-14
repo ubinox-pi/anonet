@@ -20,6 +20,7 @@
 package com.anonet.anonetclient.publicnet;
 
 import com.anonet.anonetclient.identity.LocalIdentity;
+import com.anonet.anonetclient.logging.AnonetLogger;
 import com.anonet.anonetclient.transfer.FileMetadata;
 import com.anonet.anonetclient.transfer.TransferProgress;
 import com.anonet.anonetclient.transfer.TransferProtocol;
@@ -34,6 +35,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 public final class PublicFileReceiver {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(PublicFileReceiver.class);
 
     private static final int CHUNK_SIZE = TransferProtocol.CHUNK_SIZE;
     private static final byte MSG_METADATA = 0x01;
@@ -81,6 +84,7 @@ public final class PublicFileReceiver {
         FileMetadata metadata = FileMetadata.fromBytes(metadataBytes);
 
         notifyStatus("Receiving: " + metadata.getFileName() + " (" + formatSize(metadata.getFileSize()) + ")");
+        LOG.info("Receiving file: %s (%s)", metadata.getFileName(), formatSize(metadata.getFileSize()));
 
         Path targetFile = downloadDirectory.resolve(metadata.getFileName());
         Files.createDirectories(downloadDirectory);
@@ -120,8 +124,10 @@ public final class PublicFileReceiver {
                     if (actualHash.equals(expectedHash)) {
                         complete = true;
                         sendAck();
+                        LOG.info("File received and verified: %s", metadata.getFileName());
                         notifyStatus("File received and verified: " + metadata.getFileName());
                     } else {
+                        LOG.error("File hash mismatch for %s", metadata.getFileName());
                         sendError("Hash mismatch");
                         throw new IOException("File hash mismatch");
                     }

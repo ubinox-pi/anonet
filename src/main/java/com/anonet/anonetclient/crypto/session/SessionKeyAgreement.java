@@ -20,6 +20,7 @@
 package com.anonet.anonetclient.crypto.session;
 
 import com.anonet.anonetclient.identity.LocalIdentity;
+import com.anonet.anonetclient.logging.AnonetLogger;
 
 import javax.crypto.KeyAgreement;
 import java.nio.charset.StandardCharsets;
@@ -36,6 +37,8 @@ import java.util.Arrays;
 
 public final class SessionKeyAgreement {
 
+    private static final AnonetLogger LOG = AnonetLogger.get(SessionKeyAgreement.class);
+
     private static final String KEY_ALGORITHM = "EC";
     private static final String KEY_AGREEMENT_ALGORITHM = "ECDH";
     private static final String SIGNATURE_ALGORITHM = "SHA256withECDSA";
@@ -51,6 +54,7 @@ public final class SessionKeyAgreement {
     }
 
     public SignedEphemeralKey generateSignedEphemeralKey() {
+        LOG.debug("Generating signed ephemeral key for session");
         ephemeralKeyPair = EphemeralKeyPair.generate();
         byte[] ephemeralPublicKeyBytes = ephemeralKeyPair.getPublicKeyBytes();
         byte[] signature = signData(ephemeralPublicKeyBytes, localIdentity.getPrivateKey());
@@ -59,6 +63,7 @@ public final class SessionKeyAgreement {
     }
 
     public SessionKeys completeKeyAgreement(SignedEphemeralKey peerSignedKey) {
+        LOG.debug("Completing ECDH key agreement");
         if (ephemeralKeyPair == null) {
             throw new SessionCryptoException("Must call generateSignedEphemeralKey first");
         }
@@ -71,6 +76,7 @@ public final class SessionKeyAgreement {
         );
 
         if (!validSignature) {
+            LOG.error("Peer signature verification failed");
             throw new SessionCryptoException("Peer signature verification failed - authentication error");
         }
 
@@ -91,6 +97,7 @@ public final class SessionKeyAgreement {
 
         ephemeralKeyPair = null;
 
+        LOG.info("Session key agreement completed successfully");
         return new SessionKeys(encryptionKey, nonceBase);
     }
 
@@ -101,6 +108,7 @@ public final class SessionKeyAgreement {
             signature.update(data);
             return signature.sign();
         } catch (NoSuchAlgorithmException | InvalidKeyException | SignatureException e) {
+            LOG.error("Failed to sign data", e);
             throw new SessionCryptoException("Failed to sign data", e);
         }
     }
@@ -112,6 +120,7 @@ public final class SessionKeyAgreement {
             signature.update(data);
             return signature.verify(signatureBytes);
         } catch (NoSuchAlgorithmException | InvalidKeyException | SignatureException e) {
+            LOG.error("Failed to verify signature", e);
             throw new SessionCryptoException("Failed to verify signature", e);
         }
     }
@@ -133,6 +142,7 @@ public final class SessionKeyAgreement {
             keyAgreement.doPhase(peerPublicKey, true);
             return keyAgreement.generateSecret();
         } catch (NoSuchAlgorithmException | InvalidKeyException e) {
+            LOG.error("ECDH key agreement failed", e);
             throw new SessionCryptoException("ECDH key agreement failed", e);
         }
     }

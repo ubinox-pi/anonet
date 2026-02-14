@@ -20,15 +20,22 @@
 package com.anonet.anonetclient.transfer;
 
 import com.anonet.anonetclient.identity.LocalIdentity;
+import com.anonet.anonetclient.logging.AnonetLogger;
+import com.anonet.anonetclient.security.RateLimiter;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.net.BindException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Path;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 public final class LanFileReceiver {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(LanFileReceiver.class);
 
     private final LocalIdentity localIdentity;
     private final int listenPort;
@@ -38,6 +45,9 @@ public final class LanFileReceiver {
     private ServerSocket serverSocket;
     private Consumer<TransferProgress> progressCallback;
     private Consumer<File> fileReceivedCallback;
+    private Function<String, Boolean> trustChecker;
+    private RateLimiter rateLimiter;
+    private int actualPort;
 
     public LanFileReceiver(LocalIdentity localIdentity, int listenPort, File downloadDirectory) {
         this.localIdentity = localIdentity;
@@ -55,6 +65,18 @@ public final class LanFileReceiver {
         this.fileReceivedCallback = callback;
     }
 
+    public void setTrustChecker(Function<String, Boolean> trustChecker) {
+        this.trustChecker = trustChecker;
+    }
+
+    public void setRateLimiter(RateLimiter rateLimiter) {
+        this.rateLimiter = rateLimiter;
+    }
+
+    public int getActualPort() {
+        return actualPort;
+    }
+
     public void startListening() throws IOException {
         if (running) {
             return;
@@ -64,9 +86,11 @@ public final class LanFileReceiver {
             downloadDirectory.mkdirs();
         }
 
-        serverSocket = new ServerSocket(listenPort);
+        serverSocket = bindPort(listenPort, 5);
         serverSocket.setSoTimeout(0);
+        actualPort = serverSocket.getLocalPort();
         running = true;
+        LOG.info("File receiver listening on port %d", actualPort);
     }
 
     public void acceptAndReceive() throws FileTransferException {
@@ -81,11 +105,25 @@ public final class LanFileReceiver {
             reportProgress(0, 0, 0, 0, TransferProgress.TransferState.CONNECTING);
 
             socket = serverSocket.accept();
+            if (rateLimiter != null && !rateLimiter.tryAcquire(socket.getInetAddress())) {
+                LOG.warn("Rate limit exceeded for %s", socket.getInetAddress().getHostAddress());
+                socket.close();
+                return;
+            }
             socket.setSoTimeout(TransferProtocol.SOCKET_TIMEOUT_MS);
 
             reportProgress(0, 0, 0, 0, TransferProgress.TransferState.HANDSHAKING);
 
-            secureChannel = HandshakeHelper.performReceiverHandshake(socket, localIdentity);
+            HandshakeHelper.AuthenticatedChannel authChannel = HandshakeHelper.performReceiverHandshake(socket, localIdentity);
+            secureChannel = authChannel.channel();
+            String peerFingerprint = authChannel.peerFingerprint();
+            LOG.info("Peer fingerprint: %s", peerFingerprint.substring(0, Math.min(16, peerFingerprint.length())));
+
+            if (trustChecker != null && !trustChecker.apply(peerFingerprint)) {
+                LOG.warn("Untrusted peer rejected: %s", peerFingerprint.substring(0, Math.min(16, peerFingerprint.length())));
+                reportProgress(0, 0, 0, 0, TransferProgress.TransferState.FAILED);
+                return;
+            }
 
             SecureSocketChannel.ReceivedMessage metadataMessage = secureChannel.receiveMessage();
             if (metadataMessage.getMessageType() != TransferProtocol.MSG_FILE_METADATA) {
@@ -93,21 +131,31 @@ public final class LanFileReceiver {
             }
 
             FileMetadata metadata = FileMetadata.fromBytes(metadataMessage.getPayload());
+            LOG.info("Receiving file: %s (%d bytes)", metadata.getFileName(), metadata.getFileSize());
 
             reportProgress(0, metadata.getFileSize(), 0, metadata.getTotalChunks(), TransferProgress.TransferState.TRANSFERRING);
 
-            File outputFile = new File(downloadDirectory, metadata.getFileName());
+            String safeName = Path.of(metadata.getFileName()).getFileName().toString();
+            if (safeName.isEmpty() || safeName.startsWith(".")) {
+                safeName = "received_" + System.currentTimeMillis();
+            }
+            if (safeName.length() > 255) {
+                safeName = safeName.substring(0, 255);
+            }
+            File outputFile = new File(downloadDirectory, safeName);
             receiveFileChunks(secureChannel, metadata, outputFile);
 
             secureChannel.sendMessage(TransferProtocol.MSG_TRANSFER_ACK, new byte[0]);
 
             reportProgress(metadata.getFileSize(), metadata.getFileSize(), metadata.getTotalChunks(), metadata.getTotalChunks(), TransferProgress.TransferState.COMPLETED);
+            LOG.info("File received successfully: %s", metadata.getFileName());
 
             if (fileReceivedCallback != null) {
                 fileReceivedCallback.accept(outputFile);
             }
 
         } catch (IOException e) {
+            LOG.error("File receive failed: %s", e.getMessage());
             reportProgress(0, 0, 0, 0, TransferProgress.TransferState.FAILED);
             throw new FileTransferException("File receive failed: " + e.getMessage(), e);
         } finally {
@@ -168,6 +216,7 @@ public final class LanFileReceiver {
     public void stop() {
         running = false;
         cancelled = true;
+        LOG.info("File receiver stopped");
         if (serverSocket != null && !serverSocket.isClosed()) {
             try {
                 serverSocket.close();
@@ -189,5 +238,17 @@ public final class LanFileReceiver {
             TransferProgress progress = new TransferProgress(bytesTransferred, totalBytes, chunksTransferred, totalChunks, state);
             progressCallback.accept(progress);
         }
+    }
+
+    private ServerSocket bindPort(int preferredPort, int maxRetries) throws IOException {
+        for (int i = 0; i <= maxRetries; i++) {
+            try {
+                return new ServerSocket(preferredPort + i);
+            } catch (BindException e) {
+                if (i == maxRetries) throw e;
+                LOG.warn("Port %d in use, trying %d", preferredPort + i, preferredPort + i + 1);
+            }
+        }
+        throw new IOException("No available port");
     }
 }

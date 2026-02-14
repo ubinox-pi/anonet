@@ -18,6 +18,7 @@
 
 package com.anonet.anonetclient.ui;
 
+import com.anonet.anonetclient.logging.AnonetLogger;
 import com.anonet.anonetclient.identity.DeterministicIdentity;
 import com.anonet.anonetclient.identity.LocalIdentity;
 import com.anonet.anonetclient.identity.SeedPhrase;
@@ -41,6 +42,8 @@ import javafx.stage.StageStyle;
 import java.util.function.Consumer;
 
 public final class FirstRunWizard {
+
+    private static final AnonetLogger LOG = AnonetLogger.get(FirstRunWizard.class);
 
     private static final double WIZARD_WIDTH = 550;
     private static final double WIZARD_HEIGHT = 500;
@@ -174,9 +177,11 @@ public final class FirstRunWizard {
     private void generateIdentity() {
         try {
             SeedPhrase seedPhrase = SeedPhrase.generate();
-            generatedSeedPhrase = seedPhrase.toString();
+            generatedSeedPhrase = seedPhrase.getMnemonic();
             createdIdentity = DeterministicIdentity.deriveFromSeedPhrase(seedPhrase);
+            LOG.info("Identity generated for display name: %s", chosenDisplayName);
         } catch (Exception e) {
+            LOG.error("Failed to generate identity", e);
             generatedSeedPhrase = "Error generating seed phrase";
         }
     }
